@@ -1,18 +1,16 @@
 {
   "name": "otp-sender",
-  "version": "2.0.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "B2Bomber - multi site OTP sender",
   "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
+  "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
-    "axios": "^1.7.2",
-    "express": "^4.19.2",
-    
+    "express": "^4.19.2"
   }
 }
