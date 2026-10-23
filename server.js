@@ -1,6 +1,8 @@
 /* =====================================================================
- *  B2Bomber — server.js   [BULLETPROOF ESM VERSION]
- *  Sirf express chahiye. impit optional (na ho to native fetch).
+ *  B2Bomber — server.js  [FIXED v2]
+ *  Fixes: client<->server field mismatch, hard timeout (impit hang),
+ *         /api/health live+services, /api/stats/reset, repeat param,
+ *         done event, heartbeat, verified-first ordering.
  * ===================================================================== */
 
 import express from 'express';
@@ -11,11 +13,10 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
-/* crash hone pe process na mare — Render pe crash loop se bachne ke liye */
 process.on('uncaughtException', (e) => console.error('[uncaught]', e));
 process.on('unhandledRejection', (e) => console.error('[unhandled]', e));
 
-/* impit optional — kahin bhi fail ho to chalta rahe */
+/* impit optional — na mile to native fetch */
 let impit = null;
 try {
   const mod = await import('impit');
@@ -31,8 +32,8 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
 
 /* ------------------------------- CONFIG ------------------------------- */
 const PORT        = process.env.PORT || 3000;
-const TIMEOUT_MS  = Number(process.env.TIMEOUT_MS || 12000);
-const CONC        = Number(process.env.CONC || 6);
+const TIMEOUT_MS  = Number(process.env.TIMEOUT_MS || 8000);
+const CONC        = Number(process.env.CONC || 10);
 const BENCH_AFTER = 3;
 const BENCH_MS    = 10 * 60 * 1000;
 
@@ -54,6 +55,7 @@ function hdr(origin, extra) {
 
 function normalize(raw) {
   let d = String(raw || '').replace(/\D/g, '');
+  if (d.startsWith('00')) d = d.slice(2);
   if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
   if (d.length === 11 && d.startsWith('0'))  d = d.slice(1);
   return { ten: d, cc: '91' + d, plus: '+91' + d };
@@ -61,18 +63,29 @@ function normalize(raw) {
 
 const benchWorthy = (s) => s === 0 || s === 404 || s >= 500;
 
+/* HARD timeout — impit signal ignore kare to bhi kaam kare */
+function withTimeout(p, ctrl, ms) {
+  let t;
+  const killer = new Promise((_, rej) => {
+    t = setTimeout(() => {
+      try { ctrl.abort(); } catch (_) {}
+      rej(new Error('timeout ' + ms + 'ms'));
+    }, ms);
+  });
+  return Promise.race([p, killer]).finally(() => clearTimeout(t));
+}
+
 async function request(url, opts = {}) {
   const { method = 'GET', headers = {}, body, redirect = 'follow' } = opts;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-  try {
-    if (impit) {
-      const r = await impit.fetch(url, { method, headers, body, redirect, signal: ctrl.signal });
-      return { status: r.status, ok: r.ok, text: await r.text() };
-    }
-    const r = await fetch(url, { method, headers, body, redirect, signal: ctrl.signal });
-    return { status: r.status, ok: r.ok, text: await r.text() };
-  } finally { clearTimeout(timer); }
+  const init = { method, headers, body, redirect, signal: ctrl.signal };
+
+  const r = impit
+    ? await withTimeout(impit.fetch(url, init), ctrl, TIMEOUT_MS)
+    : await withTimeout(fetch(url, init), ctrl, TIMEOUT_MS);
+
+  const text = await withTimeout(r.text(), ctrl, TIMEOUT_MS);
+  return { status: r.status, ok: r.ok, text };
 }
 
 async function tryAll(attempts) {
@@ -235,7 +248,6 @@ const SERVICES = [
 const app = express();
 app.use(express.json({ limit: '256kb' }));
 
-// index.html kahin bhi ho, mil jaye
 const STATIC_DIRS = [path.join(__dirname, 'public'), path.join(ROOT, 'public'), __dirname, ROOT];
 for (const d of STATIC_DIRS) {
   try { if (fs.existsSync(d)) app.use(express.static(d)); } catch (_) {}
@@ -249,6 +261,25 @@ app.get('/', (_req, res) => {
   res.type('html').send('<h1>B2Bomber API live</h1><p>/api/services</p>');
 });
 
+/* ---------- HEALTH — client ko ye fields chahiye ---------- */
+app.get('/api/health', (_req, res) => {
+  const benched = SERVICES.filter(s => isBenched(s.id)).length;
+  res.json({
+    ok: true,
+    impit: !!impit,
+    up: Math.round(process.uptime()),
+    services: SERVICES.length,
+    live: SERVICES.length - benched,
+    benched,
+  });
+});
+
+app.post('/api/stats/reset', (_req, res) => {
+  benchState.clear();
+  live.clear();
+  res.json({ ok: true });
+});
+
 app.get('/api/services', (_req, res) => {
   res.json(SERVICES.map(s => ({
     id: s.id, name: s.name, verified: !!s.verified, benched: isBenched(s.id), ...L(s.id),
@@ -259,8 +290,6 @@ app.get('/api/stats', (_req, res) => {
   res.json(SERVICES.map(s => ({ id: s.id, name: s.name, ...L(s.id) })));
 });
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, impit: !!impit, up: process.uptime() }));
-
 async function bomb(req, res) {
   const src = Object.assign({}, req.query, req.body || {});
   const p = normalize(src.phone || src.number || '');
@@ -268,18 +297,29 @@ async function bomb(req, res) {
     return res.status(400).json({ error: 'Sahi 10-digit mobile number do' });
   }
 
-  const rounds = Math.max(1, Math.min(parseInt(src.rounds || '1', 10) || 1, 25));
+  /* client 'repeat' bhejta hai, purane clients 'rounds' */
+  const rounds = Math.max(1, Math.min(parseInt(src.rounds || src.repeat || '1', 10) || 1, 25));
   const only   = src.services || src.only;
+  const skipDead = !(src.skipDead === false || src.skipDead === 'false');
+
   let list = (!only || only === 'all')
     ? SERVICES.slice()
     : SERVICES.filter(s => String(only).split(',').includes(s.id));
 
-  const skippedIds = list.filter(s => isBenched(s.id)).map(s => s.id);
-  list = list.filter(s => !isBenched(s.id));
+  /* verified pehle, taaki UI jaldi green dikhe */
+  list.sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0));
+
+  const skippedIds = skipDead ? list.filter(s => isBenched(s.id)).map(s => s.id) : [];
+  if (skipDead) list = list.filter(s => !isBenched(s.id));
+
+  if (!list.length) {
+    return res.status(400).json({ error: 'Saare services benched hain — health reset karo' });
+  }
 
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('X-Accel-Buffering', 'no');
+  res.setHeader('Connection', 'keep-alive');
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
   let closed = false;
@@ -287,7 +327,10 @@ async function bomb(req, res) {
   const w = (o) => { if (!closed) res.write(JSON.stringify(o) + '\n'); };
 
   const total = list.length * rounds;
-  w({ type: 'start', phone: p.ten, sites: list.length, rounds, total, skipped: skippedIds });
+  w({ type: 'start', phone: p.ten, services: list.length, repeat: rounds, total, skipped: skippedIds.length });
+
+  /* heartbeat — proxy idle stream na kaate */
+  const beat = setInterval(() => w({ type: 'ping', t: Date.now() }), 4000);
 
   const ctx = {};
   let done = 0, okTotal = 0, failTotal = 0;
@@ -314,9 +357,13 @@ async function bomb(req, res) {
     w({
       type: 'result',
       id: svc.id, name: svc.name,
-      status, ok, ms, error, round,
+      status, ok, ms, round,
+      note: error || '',
+      error,
+      sent: okTotal, failed: failTotal,
+      done, total,
+      progress: Math.round((done / total) * 100),
       site: { sent: s.sent, ok: s.ok, failed: s.failed },
-      done, total, progress: Math.round((done / total) * 100),
     });
   };
 
@@ -329,9 +376,13 @@ async function bomb(req, res) {
   });
   await Promise.all(workers);
 
+  clearInterval(beat);
+
+  /* client 'done' dhundta hai, 'summary' nahi */
   w({
-    type: 'summary',
-    sent: done, ok: okTotal, failed: failTotal, skipped: skippedIds,
+    type: 'done',
+    sent: okTotal, failed: failTotal, done, total,
+    skipped: skippedIds.length,
     sites: SERVICES.map(s => ({ id: s.id, name: s.name, benched: isBenched(s.id), ...L(s.id) })),
   });
   if (!closed) res.end();
