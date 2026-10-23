@@ -12,5 +12,8 @@
   },
   "dependencies": {
     "express": "^4.19.2"
+  },
+  "optionalDependencies": {
+    "impit": "^3.0.0"
   }
 }
