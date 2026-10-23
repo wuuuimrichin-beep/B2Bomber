@@ -1,21 +1,30 @@
 /* =====================================================================
- *  B2Bomber — server.js  (ESM version — package.json me "type":"module" hai)
- *  PURI FILE REPLACE KARO. index.html mat chhedo.
+ *  B2Bomber — server.js   [BULLETPROOF ESM VERSION]
+ *  Sirf express chahiye. impit optional (na ho to native fetch).
  * ===================================================================== */
 
 import express from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '..');
 
-/* impit = Chrome jaisa TLS fingerprint (optional). ESM me dynamic import. */
-let Impit = null;
+/* crash hone pe process na mare — Render pe crash loop se bachne ke liye */
+process.on('uncaughtException', (e) => console.error('[uncaught]', e));
+process.on('unhandledRejection', (e) => console.error('[unhandled]', e));
+
+/* impit optional — kahin bhi fail ho to chalta rahe */
+let impit = null;
 try {
   const mod = await import('impit');
-  Impit = mod.Impit || mod.default;
-} catch (_) { /* optional, chalta rahega */ }
-const impit = Impit ? new Impit({ browser: 'chrome' }) : null;
+  const Impit = mod.Impit || mod.default;
+  if (Impit) impit = new Impit({ browser: 'chrome' });
+  console.log('[ok] impit loaded');
+} catch (e) {
+  console.log('[warn] impit nahi mila, native fetch use hoga:', e.message);
+}
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
          + '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -50,6 +59,8 @@ function normalize(raw) {
   return { ten: d, cc: '91' + d, plus: '+91' + d };
 }
 
+const benchWorthy = (s) => s === 0 || s === 404 || s >= 500;
+
 async function request(url, opts = {}) {
   const { method = 'GET', headers = {}, body, redirect = 'follow' } = opts;
   const ctrl = new AbortController();
@@ -63,8 +74,6 @@ async function request(url, opts = {}) {
     return { status: r.status, ok: r.ok, text: await r.text() };
   } finally { clearTimeout(timer); }
 }
-
-const benchWorthy = (s) => s === 0 || s === 404 || s >= 500;
 
 async function tryAll(attempts) {
   let last = { status: 0, text: '', error: 'no attempt' };
@@ -102,12 +111,10 @@ function L(id) {
 }
 
 /* =====================================================================
- *  SERVICES — naya add karna ho to ye template copy karo:
- *  { id:'merasite', name:'Mera Site',
- *    attempts: (p) => [
+ *  SERVICES — naya add karna ho to template:
+ *  { id:'merasite', name:'Mera Site', attempts: (p) => [
  *      { url:'https://merasite.com/api/otp', method:'POST',
- *        headers: hdr('https://merasite.com', FORM), body: qs({ mobile: p.ten }) },
- *    ] },
+ *        headers: hdr('https://merasite.com', FORM), body: qs({ mobile: p.ten }) } ] },
  * ===================================================================== */
 
 const BLINKIT_REQ_KEY = 'c0e6868e-1180-400c-be51-f473479f1f0a';
@@ -228,12 +235,19 @@ const SERVICES = [
 const app = express();
 app.use(express.json({ limit: '256kb' }));
 
-// index.html kahin bhi ho, mil jayega (src/public, ../public, ya src/ khud)
-for (const root of [
-  path.join(__dirname, 'public'),
-  path.join(__dirname, '..', 'public'),
-  __dirname,
-]) app.use(express.static(root));
+// index.html kahin bhi ho, mil jaye
+const STATIC_DIRS = [path.join(__dirname, 'public'), path.join(ROOT, 'public'), __dirname, ROOT];
+for (const d of STATIC_DIRS) {
+  try { if (fs.existsSync(d)) app.use(express.static(d)); } catch (_) {}
+}
+
+app.get('/', (_req, res) => {
+  for (const d of STATIC_DIRS) {
+    const f = path.join(d, 'index.html');
+    if (fs.existsSync(f)) return res.sendFile(f);
+  }
+  res.type('html').send('<h1>B2Bomber API live</h1><p>/api/services</p>');
+});
 
 app.get('/api/services', (_req, res) => {
   res.json(SERVICES.map(s => ({
@@ -245,7 +259,7 @@ app.get('/api/stats', (_req, res) => {
   res.json(SERVICES.map(s => ({ id: s.id, name: s.name, ...L(s.id) })));
 });
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, up: process.uptime() }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, impit: !!impit, up: process.uptime() }));
 
 async function bomb(req, res) {
   const src = Object.assign({}, req.query, req.body || {});
@@ -266,7 +280,7 @@ async function bomb(req, res) {
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders?.();
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
   let closed = false;
   req.on('close', () => { closed = true; });
@@ -327,5 +341,5 @@ app.get('/api/bomb', bomb);
 app.post('/api/bomb', bomb);
 
 app.listen(PORT, () => {
-  console.log('B2Bomber live -> http://localhost:' + PORT + '  |  sites: ' + SERVICES.length);
+  console.log('B2Bomber live -> port ' + PORT + ' | sites: ' + SERVICES.length + ' | impit: ' + !!impit);
 });
