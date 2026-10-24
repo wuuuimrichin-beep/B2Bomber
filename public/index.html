@@ -2,70 +2,77 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>OTP Sender</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="theme-color" content="#07090d" />
+<title>B2Bomber · OTP Sender</title>
 <style>
   *{box-sizing:border-box}
-  body{margin:0;min-height:100vh;background:#0b0d12;color:#e8ecf3;
+  html,body{margin:0;padding:0}
+  body{min-height:100vh;color:#e8ecf3;
     font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-    display:flex;align-items:flex-start;justify-content:center;padding:24px 16px}
-  .wrap{width:100%;max-width:760px}
-  h1{font-size:24px;margin:0 0 6px;letter-spacing:-.5px}
-  h2{font-size:14px;margin:22px 0 8px;color:#8b95a7;text-transform:uppercase;letter-spacing:.5px}
-  .sub{color:#8b95a7;margin:0 0 18px;font-size:14px}
-  .card{background:#14171f;border:1px solid #232833;border-radius:16px;
-    padding:16px;display:flex;flex-direction:column;gap:12px}
+    background:#07090d;position:relative;overflow-x:hidden}
+  #bg{position:fixed;inset:0;z-index:-2;
+    background:url('/bg.jpg') center/cover no-repeat;
+    background-color:#07090d}
+  #veil{position:fixed;inset:0;z-index:-1;
+    background:linear-gradient(180deg,rgba(6,8,12,.72) 0%,rgba(6,8,12,.86) 45%,rgba(6,8,12,.96) 100%)}
+  .wrap{width:100%;max-width:760px;margin:0 auto;padding:22px 14px 60px}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:-.6px}
+  h1 span{color:#5b8cff}
+  h2{font-size:12px;margin:24px 0 8px;color:#8b95a7;text-transform:uppercase;letter-spacing:1px}
+  .sub{color:#8b95a7;margin:0 0 16px;font-size:13px}
+  .card{background:rgba(16,19,26,.72);backdrop-filter:blur(14px);
+    border:1px solid rgba(90,110,150,.22);border-radius:18px;padding:16px;
+    display:flex;flex-direction:column;gap:12px;box-shadow:0 18px 50px rgba(0,0,0,.5)}
   .row{display:flex;align-items:center;gap:9px}
-  .prefix{background:#1d212b;border:1px solid #2a3040;border-radius:10px;
-    padding:12px 14px;font-weight:600;color:#9aa5b8;flex:0 0 auto}
-  input[type=text]{flex:1;min-width:0;background:#0f1218;border:1px solid #2a3040;
-    border-radius:10px;padding:13px 14px;color:#fff;font-size:17px;
-    letter-spacing:1px;outline:none}
+  .prefix{background:rgba(29,33,43,.9);border:1px solid #2a3040;border-radius:10px;
+    padding:12px 14px;font-weight:600;color:#9aa5b8}
+  input[type=text]{flex:1;min-width:0;background:rgba(10,13,18,.85);border:1px solid #2a3040;
+    border-radius:10px;padding:13px 14px;color:#fff;font-size:17px;letter-spacing:1px;outline:none}
   input[type=text]:focus{border-color:#4f7cff}
   input[type=range]{flex:1;accent-color:#4f7cff}
-  label{font-size:13px;color:#8b95a7;white-space:nowrap}
+  label{font-size:13px;color:#9aa5b8;white-space:nowrap}
   .val{font-variant-numeric:tabular-nums;color:#c7d0e0;font-size:13px;min-width:22px;text-align:right}
-  button{background:linear-gradient(135deg,#4f7cff,#7a4fff);border:0;color:#fff;
-    font-size:16px;font-weight:600;padding:14px;border-radius:11px;cursor:pointer}
-  button:disabled{opacity:.55;cursor:wait}
+  button{background:linear-gradient(135deg,#3f6bff,#7a4fff);border:0;color:#fff;font-size:16px;
+    font-weight:700;padding:15px;border-radius:12px;cursor:pointer;letter-spacing:.2px}
+  button:disabled{opacity:.5}
   button.stop{background:linear-gradient(135deg,#ff4f6d,#ff7a4f)}
-  .ghost{background:#1d212b;border:1px solid #2a3040;font-size:12px;
-    padding:7px 11px;font-weight:500;border-radius:8px;color:#c7d0e0}
+  .ghost{background:rgba(29,33,43,.9);border:1px solid #2a3040;font-size:12px;padding:7px 11px;
+    font-weight:500;border-radius:8px;color:#c7d0e0}
   .presets{display:flex;gap:6px;flex-wrap:wrap}
-  #status{font-size:13px;color:#8b95a7;min-height:18px;text-align:center}
+  #status{font-size:13px;color:#9aa5b8;min-height:18px;text-align:center}
   #status.err{color:#f08a95}
   #status.good{color:#6ee7a8}
-  .bar{height:6px;background:#1d212b;border-radius:99px;overflow:hidden;display:none}
+  .bar{height:6px;background:rgba(29,33,43,.9);border-radius:99px;overflow:hidden;display:none}
   .bar.on{display:block}
-  .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#4f7cff,#7a4fff);transition:width .15s}
-  .counters{display:flex;gap:14px;justify-content:center;font-size:13px;color:#8b95a7;font-variant-numeric:tabular-nums;flex-wrap:wrap}
+  .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#3f6bff,#7a4fff);transition:width .15s}
+  .counters{display:flex;gap:14px;justify-content:center;font-size:13px;color:#9aa5b8;
+    font-variant-numeric:tabular-nums;flex-wrap:wrap}
   .counters b{color:#e8ecf3}
   table{width:100%;border-collapse:collapse;font-size:12px}
-  th{text-align:left;padding:7px 8px;color:#8b95a7;font-weight:600;border-bottom:1px solid #232833;font-size:11px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
-  td{padding:7px 8px;border-bottom:1px solid #1a1e27;vertical-align:top}
-  tr.ok td{background:#0f2018}
-  tr.bad td{background:#1e1216}
-  tr.run td{background:#121a2c}
+  th{text-align:left;padding:7px 8px;color:#8b95a7;font-weight:600;border-bottom:1px solid #232833;
+    font-size:11px;text-transform:uppercase;white-space:nowrap}
+  td{padding:7px 8px;border-bottom:1px solid rgba(26,30,39,.7);vertical-align:top}
+  tr.ok td{background:rgba(15,32,24,.7)}
+  tr.bad td{background:rgba(30,18,22,.7)}
+  tr.run td{background:rgba(18,26,44,.7)}
   .num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
-  .note{color:#8b95a7;font-family:ui-monospace,Menlo,monospace;font-size:11px;
-    max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .pill{display:inline-block;font-size:10.5px;padding:2px 7px;border-radius:99px;
-    border:1px solid #2a3040;color:#9aa5b8}
-  .pill.ok{border-color:#1f6b3f;background:#10231a;color:#6ee7a8}
-  .pill.bad{border-color:#5a2530;background:#201317;color:#f08a95}
+  .note{color:#8b95a7;font-family:ui-monospace,Menlo,monospace;font-size:11px;max-width:320px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   pre{font-size:11px;font-family:ui-monospace,Menlo,monospace;color:#8b95a7;
-    background:#0f1218;border:1px solid #232833;border-radius:10px;padding:11px;
+    background:rgba(10,13,18,.8);border:1px solid #232833;border-radius:10px;padding:11px;
     max-height:300px;overflow:auto;white-space:pre-wrap;margin:0}
   .hide{display:none}
   .foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
-  .toggle{display:flex;align-items:center;gap:7px;font-size:12.5px;color:#8b95a7}
-  .toggle input{accent-color:#4f7cff}
+  .toggle{display:flex;align-items:center;gap:7px;font-size:12.5px;color:#9aa5b8}
   .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
 </style>
 </head>
 <body>
+<div id="bg"></div><div id="veil"></div>
+
 <div class="wrap">
-  <h1>OTP Sender</h1>
+  <h1>OTP <span>Bomber</span></h1>
   <p class="sub" id="sub">loading…</p>
 
   <div class="card">
@@ -100,11 +107,11 @@
     <div id="status"></div>
 
     <div class="foot">
-      <label class="toggle"><input type="checkbox" id="skipDead" checked /> dead services skip karo</label>
+      <label class="toggle"><input type="checkbox" id="skipDead" checked /> dead skip karo</label>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="ghost" id="selftest">self-test</button>
-        <button class="ghost" id="diag">outbound diag</button>
-        <button class="ghost" id="reset">reset health</button>
+        <button class="ghost" id="diag">diag</button>
+        <button class="ghost" id="reset">reset</button>
         <button class="ghost" id="copy">copy report</button>
       </div>
     </div>
@@ -117,300 +124,189 @@
     <button class="ghost" data-filter="bad">failed</button>
   </div>
   <table>
-    <thead>
-      <tr>
-        <th>Service</th><th class="num">tries</th><th class="num">ok</th><th class="num">fail</th>
-        <th class="num">status</th><th class="num">ms</th><th>last response / error</th>
-      </tr>
-    </thead>
+    <thead><tr>
+      <th>Service</th><th class="num">tries</th><th class="num">ok</th><th class="num">fail</th>
+      <th class="num">status</th><th class="num">ms</th><th>last response / error</th>
+    </tr></thead>
     <tbody id="rows"><tr><td colspan="7" style="color:#8b95a7">abhi kuch nahi chala</td></tr></tbody>
   </table>
 
   <h2>Raw event log</h2>
   <pre id="log"></pre>
-
   <h2>Diag output</h2>
   <pre id="diagOut">—</pre>
 </div>
 
 <script>
 const $ = s => document.querySelector(s);
-const numEl = $('#num'), goEl = $('#go'), statusEl = $('#status');
-const rowsEl = $('#rows'), logEl = $('#log'), barEl = $('#bar'), diagEl = $('#diagOut');
+const numEl=$('#num'), goEl=$('#go'), statusEl=$('#status'), rowsEl=$('#rows'), logEl=$('#log'),
+      barEl=$('#bar'), diagEl=$('#diagOut');
 
-let live = 0, totalServices = 0, ac = null, report = '', filter = 'all';
-const rows = new Map();
+let live=0, ac=null, report='', filter='all';
+const rows=new Map();
 
-function setStatus(m, c) { statusEl.textContent = m; statusEl.className = c || ''; }
+const setStatus=(m,c)=>{statusEl.textContent=m;statusEl.className=c||''};
+const logLine=s=>{const t=new Date().toISOString().slice(11,19);
+  logEl.textContent=(t+'  '+s+'\n'+logEl.textContent).slice(0,12000)};
 
-function logLine(s) {
-  const t = new Date().toISOString().slice(11, 19);
-  logEl.textContent = (t + '  ' + s + '\n' + logEl.textContent).slice(0, 12000);
-}
+function digitsOf(v){let d=String(v||'').replace(/\D/g,'');
+  if(d.startsWith('00'))d=d.slice(2);
+  if(d.length===11&&d.startsWith('0'))d=d.slice(1);
+  if(d.length===10)d='91'+d;return d}
 
-function digitsOf(v) {
-  let d = String(v || '').replace(/\D/g, '');
-  if (d.startsWith('00')) d = d.slice(2);
-  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
-  if (d.length === 10) d = '91' + d;
-  return d;
-}
+function estimate(){const r=Number($('#repeat').value);
+  $('#estimate').textContent=live+' live services x '+r+' = ~'+(live*r)+' SMS'}
+$('#repeat').addEventListener('input',e=>{$('#repeatVal').textContent=e.target.value;estimate()});
 
-function estimate() {
-  const r = Number($('#repeat').value);
-  const n = Number.isFinite(live) && live > 0 ? live : 0;
-  $('#estimate').textContent = n + ' live services x ' + r + ' = ~' + (n * r) + ' SMS';
-}
-$('#repeat').addEventListener('input', e => { $('#repeatVal').textContent = e.target.value; estimate(); });
+document.querySelectorAll('[data-target]').forEach(b=>b.addEventListener('click',()=>{
+  const t=Number(b.dataset.target), n=Math.max(live,1);
+  const r=Math.min(10,Math.max(1,Math.ceil(t/n)));
+  $('#repeat').value=r;$('#repeatVal').textContent=r;estimate();
+}));
+document.querySelectorAll('[data-filter]').forEach(b=>b.addEventListener('click',()=>{filter=b.dataset.filter;render()}));
 
-document.querySelectorAll('[data-target]').forEach(b => {
-  b.addEventListener('click', () => {
-    const target = Number(b.dataset.target);
-    const n = Math.max(live, 1);
-    const r = Math.min(10, Math.max(1, Math.ceil(target / n)));
-    $('#repeat').value = r; $('#repeatVal').textContent = r; estimate();
-  });
-});
+numEl.addEventListener('input',()=>{const c=numEl.value.replace(/[^\d]/g,'');if(c!==numEl.value)numEl.value=c});
+numEl.addEventListener('keydown',e=>{if(e.key==='Enter')goEl.click()});
 
-document.querySelectorAll('[data-filter]').forEach(b => {
-  b.addEventListener('click', () => { filter = b.dataset.filter; render(); });
-});
+$('#copy').addEventListener('click',async()=>{
+  try{await navigator.clipboard.writeText(report);setStatus('report copied','good')}
+  catch{setStatus('copy failed','err')}});
 
-numEl.addEventListener('input', () => {
-  const c = numEl.value.replace(/[^\d]/g, '');
-  if (c !== numEl.value) numEl.value = c;
-});
-numEl.addEventListener('keydown', e => { if (e.key === 'Enter') goEl.click(); });
+$('#reset').addEventListener('click',async()=>{
+  await fetch('/api/stats/reset',{method:'POST'});await loadHealth();setStatus('reset done','good')});
 
-$('#copy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(report); setStatus('report copied', 'good'); }
-  catch { setStatus('copy failed', 'err'); }
-});
+$('#diag').addEventListener('click',async()=>{
+  diagEl.textContent='chal raha hai…';
+  try{const r=await fetch('/api/diag');diagEl.textContent=JSON.stringify(await r.json(),null,2)}
+  catch(e){diagEl.textContent='diag fail: '+e.message}});
 
-$('#reset').addEventListener('click', async () => {
-  await fetch('/api/stats/reset', { method: 'POST' });
-  await loadHealth();
-  setStatus('health reset', 'good');
-});
-
-$('#diag').addEventListener('click', async () => {
-  diagEl.textContent = 'chal raha hai…';
-  try {
-    const r = await fetch('/api/diag');
-    diagEl.textContent = JSON.stringify(await r.json(), null, 2);
-  } catch (e) { diagEl.textContent = 'diag fail: ' + e.message; }
-});
-
-$('#selftest').addEventListener('click', async () => {
-  diagEl.textContent = 'self-test chal raha hai (25 services, ~10s)…';
-  try {
-    const r = await fetch('/api/selftest?number=' + encodeURIComponent(digitsOf(numEl.value) || '9999999999'));
-    const d = await r.json();
+$('#selftest').addEventListener('click',async()=>{
+  diagEl.textContent='self-test + path discovery chal raha hai…';
+  try{
+    const r=await fetch('/api/selftest?number='+encodeURIComponent(digitsOf(numEl.value)||'9999999999'));
+    const d=await r.json();
     rows.clear();
-    d.results.forEach(x => upsert(x.id, x.name, { status: x.status, ms: x.ms, note: x.error || x.snippet, url: x.url }));
-    d.results.forEach(x => { if (x.ok) bump(x.id, true); else bump(x.id, false); });
-    render();
-    diagEl.textContent = JSON.stringify(d, null, 2);
-    setStatus('self-test: ' + d.ok + '/' + d.total + ' services live', d.ok ? 'good' : 'err');
-  } catch (e) { diagEl.textContent = 'selftest fail: ' + e.message; }
-});
+    d.results.forEach(x=>upsert(x.id,x.name,{status:x.status,ms:x.ms,note:(x.error||'')+(x.snippet?' · '+x.snippet:''),url:x.url}));
+    d.results.forEach(x=>bump(x.id,!!x.ok));
+    render();diagEl.textContent=JSON.stringify(d,null,2);
+    setStatus('self-test: '+d.ok+'/'+d.total+' live (baaki bench)',d.ok?'good':'err');
+  }catch(e){diagEl.textContent='selftest fail: '+e.message}
+  finally{loadHealth()}});
 
-async function loadHealth() {
-  try {
-    const r = await fetch('/api/health', { cache: 'no-store' });
-    const d = await r.json();
-    live = Number.isFinite(d.live) ? d.live : 0;
-    totalServices = Number.isFinite(d.services) ? d.services : 0;
-    $('#sub').textContent = totalServices + ' services · ' + live + ' live'
-      + (d.benched ? ' · ' + d.benched + ' benched' : '')
-      + ' · impit ' + (d.impit ? 'ON' : 'OFF');
-    $('#reset').style.display = d.benched ? 'inline-block' : 'none';
+async function loadHealth(){
+  try{
+    const r=await fetch('/api/health',{cache:'no-store'});const d=await r.json();
+    live=Number.isFinite(d.live)?d.live:0;
+    $('#sub').textContent=d.services+' services · '+live+' live'
+      +(d.benched?' · '+d.benched+' benched':'')
+      +(d.solved?' · '+d.solved+' path solved':'');
+    $('#reset').style.display=d.benched?'inline-block':'none';
     estimate();
-  } catch { $('#sub').textContent = 'server reachable nahi hai'; }
+  }catch{$('#sub').textContent='server reachable nahi hai'}
 }
 
-/* ---------- table ---------- */
-function upsert(id, name, patch) {
-  let r = rows.get(id);
-  if (!r) {
-    r = { id, name, tries: 0, ok: 0, fail: 0, status: 0, ms: 0, note: '', url: '' };
-    rows.set(id, r);
-  }
-  Object.assign(r, patch || {});
-  if (name) r.name = name;
-  render();
-  return r;
-}
-function bump(id, ok) {
-  const r = rows.get(id); if (!r) return;
-  r.tries++; if (ok) r.ok++; else r.fail++;
-  render();
-}
-function render() {
-  const list = [...rows.values()].filter(r =>
-    filter === 'all' ? true : filter === 'ok' ? r.ok > 0 : r.ok === 0);
-  if (!list.length) {
-    rowsEl.innerHTML = '<tr><td colspan="7" style="color:#8b95a7">abhi kuch nahi chala</td></tr>';
-    return;
-  }
-  rowsEl.innerHTML = '';
-  list.forEach(r => {
-    const tr = document.createElement('tr');
-    tr.className = r.tries === 0 ? 'run' : (r.ok > 0 ? 'ok' : 'bad');
-    const cells = [
-      [r.name, ''],
-      [String(r.tries), 'num'],
-      [String(r.ok), 'num'],
-      [String(r.fail), 'num'],
-      [r.status || '—', 'num'],
-      [r.ms ? r.ms + 'ms' : '—', 'num'],
-      [r.note || r.url || '', 'note'],
-    ];
-    cells.forEach(([v, cls]) => {
-      const td = document.createElement('td');
-      if (cls) td.className = cls;
-      td.textContent = v;
-      if (cls === 'note') td.title = (r.url || '') + '\n' + (r.note || '');
-      tr.appendChild(td);
-    });
-    rowsEl.appendChild(tr);
-  });
+function upsert(id,name,patch){let r=rows.get(id);
+  if(!r){r={id,name,tries:0,ok:0,fail:0,status:0,ms:0,note:'',url:''};rows.set(id,r)}
+  Object.assign(r,patch||{});if(name)r.name=name;render();return r}
+function bump(id,ok){const r=rows.get(id);if(!r)return;r.tries++;ok?r.ok++:r.fail++;render()}
+function render(){
+  const list=[...rows.values()].filter(r=>filter==='all'?true:filter==='ok'?r.ok>0:r.ok===0);
+  if(!list.length){rowsEl.innerHTML='<tr><td colspan="7" style="color:#8b95a7">abhi kuch nahi chala</td></tr>';return}
+  rowsEl.innerHTML='';
+  list.forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.className=r.tries===0?'run':(r.ok>0?'ok':'bad');
+    [[r.name,''],[String(r.tries),'num'],[String(r.ok),'num'],[String(r.fail),'num'],
+     [r.status||'—','num'],[r.ms?r.ms+'ms':'—','num'],[r.note||r.url||'','note']]
+    .forEach(([v,cls])=>{
+      const td=document.createElement('td');if(cls)td.className=cls;td.textContent=v;
+      if(cls==='note')td.title=(r.url||'')+'\n'+(r.note||'');
+      tr.appendChild(td)});
+    rowsEl.appendChild(tr)});
 }
 
-/* ---------- run ---------- */
-goEl.addEventListener('click', async () => {
-  if (goEl.dataset.busy) return;
+goEl.addEventListener('click',async()=>{
+  if(goEl.dataset.busy)return;
+  const raw=numEl.value.trim();if(!raw)return setStatus('number daalo','err');
+  const digits=digitsOf(raw);
+  if(digits.length<11||digits.length>15)return setStatus('valid number daalo','err');
+  numEl.value=digits;
 
-  const raw = numEl.value.trim();
-  if (!raw) return setStatus('number daalo', 'err');
-  const digits = digitsOf(raw);
-  if (digits.length < 11 || digits.length > 15)
-    return setStatus('valid number daalo (10 digit India ya +country code)', 'err');
-  numEl.value = digits;
+  const repeat=Number($('#repeat').value), skipDead=$('#skipDead').checked;
 
-  const repeat = Number($('#repeat').value);
-  const skipDead = $('#skipDead').checked;
-
-  goEl.dataset.busy = '1';
-  goEl.disabled = true; goEl.classList.add('stop'); goEl.textContent = 'Stop';
-  rows.clear(); render();
-  logEl.textContent = '';
-  $('#copy').style.display = 'none';
-  barEl.classList.add('on'); $('#barFill').style.width = '0%';
+  goEl.dataset.busy='1';goEl.disabled=true;goEl.classList.add('stop');goEl.textContent='Stop';
+  rows.clear();render();logEl.textContent='';$('#copy').style.display='none';
+  barEl.classList.add('on');$('#barFill').style.width='0%';
   $('#counters').classList.remove('hide');
-  ['cSent','cFail','cDone'].forEach(i => $('#' + i).textContent = '0');
+  ['cSent','cFail','cDone'].forEach(i=>$('#'+i).textContent='0');
   setStatus('start ho raha hai…');
 
-  const t0 = performance.now();
-  const tick = setInterval(() => {
-    $('#cTime').textContent = ((performance.now() - t0) / 1000).toFixed(0);
-  }, 200);
+  const t0=performance.now();
+  const tick=setInterval(()=>{$('#cTime').textContent=((performance.now()-t0)/1000).toFixed(0)},200);
 
-  ac = new AbortController();
-  let stopped = false;
-  goEl.onclick = () => { stopped = true; ac.abort(); };
+  ac=new AbortController();let stopped=false;
+  goEl.onclick=()=>{stopped=true;ac.abort()};
 
-  try {
-    const resp = await fetch('/api/bomb', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ number: digits, repeat, skipDead }),
-      signal: ac.signal,
-    });
+  try{
+    const resp=await fetch('/api/bomb',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({number:digits,repeat,skipDead}),signal:ac.signal});
 
-    if (!resp.ok) {
-      const d = await resp.json().catch(() => ({}));
-      throw new Error(d.error || ('HTTP ' + resp.status));
-    }
+    if(!resp.ok){const d=await resp.json().catch(()=>({}));throw new Error(d.error||('HTTP '+resp.status))}
 
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '', total = 0, sent = 0, fail = 0, done = 0, got = 0;
+    const reader=resp.body.getReader(),dec=new TextDecoder();
+    let buf='',total=0,sent=0,fail=0,done=0,got=0;
 
-    while (true) {
-      const { value, done: fin } = await reader.read();
-      if (fin) break;
-      buf += dec.decode(value, { stream: true });
+    while(true){
+      const {value,done:fin}=await reader.read();if(fin)break;
+      buf+=dec.decode(value,{stream:true});
       let idx;
-      while ((idx = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, idx).trim();
-        buf = buf.slice(idx + 1);
-        if (!line) continue;
-
-        let ev;
-        try { ev = JSON.parse(line); } catch { continue; }
+      while((idx=buf.indexOf('\n'))>=0){
+        const line=buf.slice(0,idx).trim();buf=buf.slice(idx+1);
+        if(!line)continue;
+        let ev;try{ev=JSON.parse(line)}catch{continue}
         got++;
-
-        if (ev.type === 'start') {
-          total = ev.total;
-          $('#cTotal').textContent = total;
-          setStatus(ev.services + ' services x ' + ev.repeat + ' = ' + total + ' requests'
-            + (ev.skipped ? ' (' + ev.skipped + ' benched skip)' : ''));
-          logLine('START ' + JSON.stringify(ev));
-        } else if (ev.type === 'result') {
-          done = ev.done; sent = ev.sent; fail = ev.failed;
-          $('#cSent').textContent = sent;
-          $('#cFail').textContent = fail;
-          $('#cDone').textContent = done;
-          $('#barFill').style.width = (done / total * 100).toFixed(1) + '%';
-
-          upsert(ev.id, ev.name, {
-            status: ev.status, ms: ev.ms,
-            note: (ev.error || '') + (ev.snippet ? ' · ' + ev.snippet : ''),
-            url: ev.url || '',
-          });
-          bump(ev.id, !!ev.ok);
-          logLine('RESULT ' + ev.name + ' status=' + ev.status + ' ok=' + ev.ok + ' ' + ev.ms + 'ms ' + (ev.error || ''));
-        } else if (ev.type === 'done') {
-          logLine('DONE ' + JSON.stringify({ sent: ev.sent, failed: ev.failed, total: ev.total }));
-          finish(ev, Math.round(performance.now() - t0));
-        } else if (ev.type === 'error') {
-          setStatus('server error: ' + ev.error, 'err');
-        }
+        if(ev.type==='start'){
+          total=ev.total;$('#cTotal').textContent=total;
+          setStatus(ev.services+' services x '+ev.repeat+' = '+total+' requests'+(ev.skipped?' ('+ev.skipped+' skip)':''));
+          logLine('START '+JSON.stringify(ev));
+        }else if(ev.type==='result'){
+          done=ev.done;sent=ev.sent;fail=ev.failed;
+          $('#cSent').textContent=sent;$('#cFail').textContent=fail;$('#cDone').textContent=done;
+          $('#barFill').style.width=(done/total*100).toFixed(1)+'%';
+          upsert(ev.id,ev.name,{status:ev.status,ms:ev.ms,note:(ev.error||'')+(ev.snippet?' · '+ev.snippet:''),url:ev.url||''});
+          bump(ev.id,!!ev.ok);
+          logLine('RESULT '+ev.name+' status='+ev.status+' ok='+ev.ok+' '+(ev.error||''));
+        }else if(ev.type==='done'){
+          logLine('DONE '+JSON.stringify(ev));finish(ev,Math.round(performance.now()-t0));
+        }else if(ev.type==='error'){setStatus('server error: '+ev.error,'err')}
       }
     }
-
-    if (!got) setStatus('stream khula par ek bhi event nahi aaya', 'err');
-    else if (stopped) setStatus('stopped — ' + sent + ' OTP gaye', 'err');
-    else if (!report) setStatus('stream band ho gaya bina done event ke', 'err');
-  } catch (e) {
-    if (e.name === 'AbortError') setStatus('stopped', 'err');
-    else setStatus('Error: ' + e.message, 'err');
-    logLine('ERROR ' + e.message);
-  } finally {
-    clearInterval(tick);
-    ac = null; goEl.dataset.busy = '';
-    goEl.disabled = false; goEl.classList.remove('stop');
-    goEl.textContent = 'Send OTPs'; goEl.onclick = null;
+    if(!got)setStatus('stream khula par koi event nahi','err');
+    else if(stopped)setStatus('stopped — '+sent+' OTP gaye','err');
+    else if(!report)setStatus('stream band ho gaya bina done','err');
+  }catch(e){
+    if(e.name==='AbortError')setStatus('stopped','err');else setStatus('Error: '+e.message,'err');
+    logLine('ERROR '+e.message);
+  }finally{
+    clearInterval(tick);ac=null;goEl.dataset.busy='';
+    goEl.disabled=false;goEl.classList.remove('stop');goEl.textContent='Send OTPs';goEl.onclick=null;
     loadHealth();
   }
 });
 
-function finish(ev, ms) {
+function finish(ev,ms){
   barEl.classList.remove('on');
-  const all = [...rows.values()];
-  const okNames = all.filter(r => r.ok > 0).map(r => r.name);
-  const dead = all.filter(r => r.ok === 0).map(r => r.name);
-
-  setStatus(ev.sent + ' OTP gaye / ' + ev.total + ' requests · ' + ms + 'ms'
-    + (dead.length ? ' · ' + dead.length + ' services dead' : ''), ev.sent ? 'good' : 'err');
-
-  report = [
-    'number: ' + numEl.value,
-    'total: ' + ev.total + '  sent: ' + ev.sent + '  failed: ' + ev.failed + '  time: ' + ms + 'ms',
-    'OK   (' + okNames.length + '): ' + (okNames.join(', ') || '-'),
-    'DEAD (' + dead.length + '): ' + (dead.join(', ') || '-'),
-    '',
-    ...all.map(r => r.name.padEnd(16) + ' ok=' + r.ok + '/' + r.tries
-      + '  status=' + r.status + '  ' + r.ms + 'ms  ' + (r.note || '').slice(0, 90)),
-  ].join('\n');
-
-  diagEl.textContent = report;
-  $('#copy').style.display = 'inline-block';
+  const all=[...rows.values()];
+  const okNames=all.filter(r=>r.ok>0).map(r=>r.name);
+  const dead=all.filter(r=>r.ok===0).map(r=>r.name);
+  setStatus(ev.sent+' OTP gaye / '+ev.total+' requests · '+ms+'ms'+(dead.length?' · '+dead.length+' dead':''),ev.sent?'good':'err');
+  report=['number: '+numEl.value,'total: '+ev.total+'  sent: '+ev.sent+'  failed: '+ev.failed+'  time: '+ms+'ms',
+    'OK   ('+okNames.length+'): '+(okNames.join(', ')||'-'),'DEAD ('+dead.length+'): '+(dead.join(', ')||'-'),'',
+    ...all.map(r=>r.name.padEnd(16)+' ok='+r.ok+'/'+r.tries+' status='+r.status+' '+(r.note||'').slice(0,90))].join('\n');
+  diagEl.textContent=report;$('#copy').style.display='inline-block';
 }
 
-loadHealth();
-render();
+loadHealth();render();
 </script>
 </body>
 </html>
