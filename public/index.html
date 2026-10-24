@@ -8,12 +8,13 @@
   *{box-sizing:border-box}
   body{margin:0;min-height:100vh;background:#0b0d12;color:#e8ecf3;
     font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-    display:flex;align-items:flex-start;justify-content:center;padding:30px 18px}
-  .wrap{width:100%;max-width:640px}
-  h1{font-size:25px;margin:0 0 6px;letter-spacing:-.5px}
-  .sub{color:#8b95a7;margin:0 0 20px;font-size:14px}
+    display:flex;align-items:flex-start;justify-content:center;padding:24px 16px}
+  .wrap{width:100%;max-width:760px}
+  h1{font-size:24px;margin:0 0 6px;letter-spacing:-.5px}
+  h2{font-size:14px;margin:22px 0 8px;color:#8b95a7;text-transform:uppercase;letter-spacing:.5px}
+  .sub{color:#8b95a7;margin:0 0 18px;font-size:14px}
   .card{background:#14171f;border:1px solid #232833;border-radius:16px;
-    padding:18px;display:flex;flex-direction:column;gap:13px}
+    padding:16px;display:flex;flex-direction:column;gap:12px}
   .row{display:flex;align-items:center;gap:9px}
   .prefix{background:#1d212b;border:1px solid #2a3040;border-radius:10px;
     padding:12px 14px;font-weight:600;color:#9aa5b8;flex:0 0 auto}
@@ -23,61 +24,60 @@
   input[type=text]:focus{border-color:#4f7cff}
   input[type=range]{flex:1;accent-color:#4f7cff}
   label{font-size:13px;color:#8b95a7;white-space:nowrap}
-  .val{font-variant-numeric:tabular-nums;color:#c7d0e0;font-size:13px;
-    min-width:22px;text-align:right}
+  .val{font-variant-numeric:tabular-nums;color:#c7d0e0;font-size:13px;min-width:22px;text-align:right}
   button{background:linear-gradient(135deg,#4f7cff,#7a4fff);border:0;color:#fff;
     font-size:16px;font-weight:600;padding:14px;border-radius:11px;cursor:pointer}
   button:disabled{opacity:.55;cursor:wait}
   button.stop{background:linear-gradient(135deg,#ff4f6d,#ff7a4f)}
   .ghost{background:#1d212b;border:1px solid #2a3040;font-size:12px;
     padding:7px 11px;font-weight:500;border-radius:8px;color:#c7d0e0}
-  .ghost.active{background:#26324a;border-color:#4f7cff;color:#cfe0ff}
   .presets{display:flex;gap:6px;flex-wrap:wrap}
   #status{font-size:13px;color:#8b95a7;min-height:18px;text-align:center}
   #status.err{color:#f08a95}
   #status.good{color:#6ee7a8}
   .bar{height:6px;background:#1d212b;border-radius:99px;overflow:hidden;display:none}
   .bar.on{display:block}
-  .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#4f7cff,#7a4fff);
-    transition:width .18s}
-  .counters{display:flex;gap:14px;justify-content:center;font-size:13px;color:#8b95a7;
-    font-variant-numeric:tabular-nums}
+  .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#4f7cff,#7a4fff);transition:width .15s}
+  .counters{display:flex;gap:14px;justify-content:center;font-size:13px;color:#8b95a7;font-variant-numeric:tabular-nums;flex-wrap:wrap}
   .counters b{color:#e8ecf3}
-  .grid{margin-top:16px;display:grid;gap:7px;
-    grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
-  .chip{display:flex;justify-content:space-between;align-items:center;gap:8px;
-    padding:9px 11px;border-radius:9px;font-size:12.5px;
-    border:1px solid #232833;background:#14171f;overflow:hidden}
-  .chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .chip.ok{border-color:#1f6b3f;background:#10231a;color:#6ee7a8}
-  .chip.bad{border-color:#5a2530;background:#201317;color:#f08a95}
-  .chip.run{border-color:#3a4a7a;background:#141c2e;color:#9db6ff}
-  .chip b{font-variant-numeric:tabular-nums;flex:0 0 auto}
-  .debug{margin-top:12px;font-size:11.5px;font-family:ui-monospace,Menlo,monospace;
-    color:#8b95a7;background:#0f1218;border:1px solid #232833;border-radius:10px;
-    padding:11px;max-height:260px;overflow:auto;white-space:pre-wrap;display:none}
-  .debug.on{display:block}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;padding:7px 8px;color:#8b95a7;font-weight:600;border-bottom:1px solid #232833;font-size:11px;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
+  td{padding:7px 8px;border-bottom:1px solid #1a1e27;vertical-align:top}
+  tr.ok td{background:#0f2018}
+  tr.bad td{background:#1e1216}
+  tr.run td{background:#121a2c}
+  .num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .note{color:#8b95a7;font-family:ui-monospace,Menlo,monospace;font-size:11px;
+    max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pill{display:inline-block;font-size:10.5px;padding:2px 7px;border-radius:99px;
+    border:1px solid #2a3040;color:#9aa5b8}
+  .pill.ok{border-color:#1f6b3f;background:#10231a;color:#6ee7a8}
+  .pill.bad{border-color:#5a2530;background:#201317;color:#f08a95}
+  pre{font-size:11px;font-family:ui-monospace,Menlo,monospace;color:#8b95a7;
+    background:#0f1218;border:1px solid #232833;border-radius:10px;padding:11px;
+    max-height:300px;overflow:auto;white-space:pre-wrap;margin:0}
+  .hide{display:none}
+  .foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
   .toggle{display:flex;align-items:center;gap:7px;font-size:12.5px;color:#8b95a7}
   .toggle input{accent-color:#4f7cff}
-  .foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>OTP Sender</h1>
-  <p class="sub" id="sub">Number daalo — har service pe OTP jaayega, phir dobara resend hoga.</p>
+  <p class="sub" id="sub">loading…</p>
 
   <div class="card">
     <div class="row">
       <span class="prefix">+91</span>
-      <input id="num" type="text" inputmode="tel" maxlength="16"
-             placeholder="9876543210" autocomplete="tel" />
+      <input id="num" type="text" inputmode="tel" maxlength="16" placeholder="9876543210" autocomplete="tel" />
     </div>
 
     <div class="row">
       <label for="repeat">Resend per site</label>
-      <input id="repeat" type="range" min="1" max="10" value="5" />
-      <span class="val" id="repeatVal">5</span>
+      <input id="repeat" type="range" min="1" max="10" value="3" />
+      <span class="val" id="repeatVal">3</span>
     </div>
 
     <div class="presets">
@@ -91,7 +91,7 @@
 
     <button id="go">Send OTPs</button>
     <div class="bar" id="bar"><i id="barFill"></i></div>
-    <div class="counters" id="counters" style="display:none">
+    <div class="counters hide" id="counters">
       <span>sent <b id="cSent">0</b></span>
       <span>failed <b id="cFail">0</b></span>
       <span>done <b id="cDone">0</b>/<b id="cTotal">0</b></span>
@@ -101,24 +101,52 @@
 
     <div class="foot">
       <label class="toggle"><input type="checkbox" id="skipDead" checked /> dead services skip karo</label>
-      <label class="toggle"><input type="checkbox" id="dbg" /> debug</label>
-      <button class="ghost" id="reset" style="display:none">reset health</button>
-      <button class="ghost" id="copy" style="display:none">copy report</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="ghost" id="selftest">self-test</button>
+        <button class="ghost" id="diag">outbound diag</button>
+        <button class="ghost" id="reset">reset health</button>
+        <button class="ghost" id="copy">copy report</button>
+      </div>
     </div>
   </div>
 
-  <div id="results" class="grid"></div>
-  <pre id="debug" class="debug"></pre>
+  <h2>Per-service result</h2>
+  <div class="tabs">
+    <button class="ghost" data-filter="all">all</button>
+    <button class="ghost" data-filter="ok">ok</button>
+    <button class="ghost" data-filter="bad">failed</button>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Service</th><th class="num">tries</th><th class="num">ok</th><th class="num">fail</th>
+        <th class="num">status</th><th class="num">ms</th><th>last response / error</th>
+      </tr>
+    </thead>
+    <tbody id="rows"><tr><td colspan="7" style="color:#8b95a7">abhi kuch nahi chala</td></tr></tbody>
+  </table>
+
+  <h2>Raw event log</h2>
+  <pre id="log"></pre>
+
+  <h2>Diag output</h2>
+  <pre id="diagOut">—</pre>
 </div>
 
 <script>
 const $ = s => document.querySelector(s);
 const numEl = $('#num'), goEl = $('#go'), statusEl = $('#status');
-const resultsEl = $('#results'), debugEl = $('#debug'), barEl = $('#bar');
+const rowsEl = $('#rows'), logEl = $('#log'), barEl = $('#bar'), diagEl = $('#diagOut');
 
-let live = 0, totalServices = 0, ac = null, report = '';
+let live = 0, totalServices = 0, ac = null, report = '', filter = 'all';
+const rows = new Map();
 
 function setStatus(m, c) { statusEl.textContent = m; statusEl.className = c || ''; }
+
+function logLine(s) {
+  const t = new Date().toISOString().slice(11, 19);
+  logEl.textContent = (t + '  ' + s + '\n' + logEl.textContent).slice(0, 12000);
+}
 
 function digitsOf(v) {
   let d = String(v || '').replace(/\D/g, '');
@@ -130,7 +158,7 @@ function digitsOf(v) {
 
 function estimate() {
   const r = Number($('#repeat').value);
-  const n = Math.max(live, 1);
+  const n = Number.isFinite(live) && live > 0 ? live : 0;
   $('#estimate').textContent = n + ' live services x ' + r + ' = ~' + (n * r) + ' SMS';
 }
 $('#repeat').addEventListener('input', e => { $('#repeatVal').textContent = e.target.value; estimate(); });
@@ -138,11 +166,14 @@ $('#repeat').addEventListener('input', e => { $('#repeatVal').textContent = e.ta
 document.querySelectorAll('[data-target]').forEach(b => {
   b.addEventListener('click', () => {
     const target = Number(b.dataset.target);
-    const r = Math.min(10, Math.max(1, Math.ceil(target / Math.max(live, 1))));
-    $('#repeat').value = r;
-    $('#repeatVal').textContent = r;
-    estimate();
+    const n = Math.max(live, 1);
+    const r = Math.min(10, Math.max(1, Math.ceil(target / n)));
+    $('#repeat').value = r; $('#repeatVal').textContent = r; estimate();
   });
+});
+
+document.querySelectorAll('[data-filter]').forEach(b => {
+  b.addEventListener('click', () => { filter = b.dataset.filter; render(); });
 });
 
 numEl.addEventListener('input', () => {
@@ -150,9 +181,6 @@ numEl.addEventListener('input', () => {
   if (c !== numEl.value) numEl.value = c;
 });
 numEl.addEventListener('keydown', e => { if (e.key === 'Enter') goEl.click(); });
-
-$('#dbg').addEventListener('change', e => debugEl.classList.toggle('on', e.target.checked));
-$('#skipDead').addEventListener('change', estimate);
 
 $('#copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(report); setStatus('report copied', 'good'); }
@@ -165,35 +193,91 @@ $('#reset').addEventListener('click', async () => {
   setStatus('health reset', 'good');
 });
 
+$('#diag').addEventListener('click', async () => {
+  diagEl.textContent = 'chal raha hai…';
+  try {
+    const r = await fetch('/api/diag');
+    diagEl.textContent = JSON.stringify(await r.json(), null, 2);
+  } catch (e) { diagEl.textContent = 'diag fail: ' + e.message; }
+});
+
+$('#selftest').addEventListener('click', async () => {
+  diagEl.textContent = 'self-test chal raha hai (25 services, ~10s)…';
+  try {
+    const r = await fetch('/api/selftest?number=' + encodeURIComponent(digitsOf(numEl.value) || '9999999999'));
+    const d = await r.json();
+    rows.clear();
+    d.results.forEach(x => upsert(x.id, x.name, { status: x.status, ms: x.ms, note: x.error || x.snippet, url: x.url }));
+    d.results.forEach(x => { if (x.ok) bump(x.id, true); else bump(x.id, false); });
+    render();
+    diagEl.textContent = JSON.stringify(d, null, 2);
+    setStatus('self-test: ' + d.ok + '/' + d.total + ' services live', d.ok ? 'good' : 'err');
+  } catch (e) { diagEl.textContent = 'selftest fail: ' + e.message; }
+});
+
 async function loadHealth() {
   try {
-    const r = await fetch('/api/health');
+    const r = await fetch('/api/health', { cache: 'no-store' });
     const d = await r.json();
-    live = d.live; totalServices = d.services;
-    $('#sub').textContent = totalServices + ' services · ' + live + ' live' +
-      (d.benched ? ' · ' + d.benched + ' benched' : '');
+    live = Number.isFinite(d.live) ? d.live : 0;
+    totalServices = Number.isFinite(d.services) ? d.services : 0;
+    $('#sub').textContent = totalServices + ' services · ' + live + ' live'
+      + (d.benched ? ' · ' + d.benched + ' benched' : '')
+      + ' · impit ' + (d.impit ? 'ON' : 'OFF');
     $('#reset').style.display = d.benched ? 'inline-block' : 'none';
     estimate();
   } catch { $('#sub').textContent = 'server reachable nahi hai'; }
 }
 
-/* ---------- per-service state ---------- */
-const svc = new Map();
-function chip(name) {
-  let el = svc.get(name);
-  if (!el) {
-    el = document.createElement('div');
-    el.className = 'chip run';
-    const s = document.createElement('span'); s.textContent = name;
-    const b = document.createElement('b'); b.textContent = '0/0';
-    el.append(s, b);
-    el._counts = { ok: 0, total: 0, notes: [] };
-    resultsEl.appendChild(el);
-    svc.set(name, el);
+/* ---------- table ---------- */
+function upsert(id, name, patch) {
+  let r = rows.get(id);
+  if (!r) {
+    r = { id, name, tries: 0, ok: 0, fail: 0, status: 0, ms: 0, note: '', url: '' };
+    rows.set(id, r);
   }
-  return el;
+  Object.assign(r, patch || {});
+  if (name) r.name = name;
+  render();
+  return r;
+}
+function bump(id, ok) {
+  const r = rows.get(id); if (!r) return;
+  r.tries++; if (ok) r.ok++; else r.fail++;
+  render();
+}
+function render() {
+  const list = [...rows.values()].filter(r =>
+    filter === 'all' ? true : filter === 'ok' ? r.ok > 0 : r.ok === 0);
+  if (!list.length) {
+    rowsEl.innerHTML = '<tr><td colspan="7" style="color:#8b95a7">abhi kuch nahi chala</td></tr>';
+    return;
+  }
+  rowsEl.innerHTML = '';
+  list.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.className = r.tries === 0 ? 'run' : (r.ok > 0 ? 'ok' : 'bad');
+    const cells = [
+      [r.name, ''],
+      [String(r.tries), 'num'],
+      [String(r.ok), 'num'],
+      [String(r.fail), 'num'],
+      [r.status || '—', 'num'],
+      [r.ms ? r.ms + 'ms' : '—', 'num'],
+      [r.note || r.url || '', 'note'],
+    ];
+    cells.forEach(([v, cls]) => {
+      const td = document.createElement('td');
+      if (cls) td.className = cls;
+      td.textContent = v;
+      if (cls === 'note') td.title = (r.url || '') + '\n' + (r.note || '');
+      tr.appendChild(td);
+    });
+    rowsEl.appendChild(tr);
+  });
 }
 
+/* ---------- run ---------- */
 goEl.addEventListener('click', async () => {
   if (goEl.dataset.busy) return;
 
@@ -208,15 +292,14 @@ goEl.addEventListener('click', async () => {
   const skipDead = $('#skipDead').checked;
 
   goEl.dataset.busy = '1';
-  goEl.disabled = true;
-  goEl.classList.add('stop');
-  goEl.textContent = 'Stop';
-  resultsEl.innerHTML = ''; svc.clear();
+  goEl.disabled = true; goEl.classList.add('stop'); goEl.textContent = 'Stop';
+  rows.clear(); render();
+  logEl.textContent = '';
   $('#copy').style.display = 'none';
   barEl.classList.add('on'); $('#barFill').style.width = '0%';
-  $('#counters').style.display = 'flex';
+  $('#counters').classList.remove('hide');
   ['cSent','cFail','cDone'].forEach(i => $('#' + i).textContent = '0');
-  setStatus('start ho raha hai...');
+  setStatus('start ho raha hai…');
 
   const t0 = performance.now();
   const tick = setInterval(() => {
@@ -242,8 +325,7 @@ goEl.addEventListener('click', async () => {
 
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
-    let buf = '';
-    let total = 0, sent = 0, fail = 0, done = 0;
+    let buf = '', total = 0, sent = 0, fail = 0, done = 0, got = 0;
 
     while (true) {
       const { value, done: fin } = await reader.read();
@@ -257,12 +339,14 @@ goEl.addEventListener('click', async () => {
 
         let ev;
         try { ev = JSON.parse(line); } catch { continue; }
+        got++;
 
         if (ev.type === 'start') {
           total = ev.total;
           $('#cTotal').textContent = total;
-          setStatus(ev.services + ' services x ' + ev.repeat + ' = ' + total + ' requests' +
-            (ev.skipped ? ' (' + ev.skipped + ' benched skip)' : ''));
+          setStatus(ev.services + ' services x ' + ev.repeat + ' = ' + total + ' requests'
+            + (ev.skipped ? ' (' + ev.skipped + ' benched skip)' : ''));
+          logLine('START ' + JSON.stringify(ev));
         } else if (ev.type === 'result') {
           done = ev.done; sent = ev.sent; fail = ev.failed;
           $('#cSent').textContent = sent;
@@ -270,14 +354,15 @@ goEl.addEventListener('click', async () => {
           $('#cDone').textContent = done;
           $('#barFill').style.width = (done / total * 100).toFixed(1) + '%';
 
-          const el = chip(ev.name);
-          el._counts.total++;
-          if (ev.ok) el._counts.ok++;
-          el._counts.notes.push(ev.status + ' ' + ev.note + ' (' + ev.ms + 'ms)');
-          el.className = 'chip ' + (el._counts.ok ? 'ok' : 'bad');
-          el.querySelector('b').textContent = el._counts.ok + '/' + el._counts.total;
-          el.title = el._counts.notes.join('\n');
+          upsert(ev.id, ev.name, {
+            status: ev.status, ms: ev.ms,
+            note: (ev.error || '') + (ev.snippet ? ' · ' + ev.snippet : ''),
+            url: ev.url || '',
+          });
+          bump(ev.id, !!ev.ok);
+          logLine('RESULT ' + ev.name + ' status=' + ev.status + ' ok=' + ev.ok + ' ' + ev.ms + 'ms ' + (ev.error || ''));
         } else if (ev.type === 'done') {
+          logLine('DONE ' + JSON.stringify({ sent: ev.sent, failed: ev.failed, total: ev.total }));
           finish(ev, Math.round(performance.now() - t0));
         } else if (ev.type === 'error') {
           setStatus('server error: ' + ev.error, 'err');
@@ -285,45 +370,47 @@ goEl.addEventListener('click', async () => {
       }
     }
 
-    if (stopped) setStatus('stopped — ' + sent + ' OTP gaye', 'err');
+    if (!got) setStatus('stream khula par ek bhi event nahi aaya', 'err');
+    else if (stopped) setStatus('stopped — ' + sent + ' OTP gaye', 'err');
+    else if (!report) setStatus('stream band ho gaya bina done event ke', 'err');
   } catch (e) {
     if (e.name === 'AbortError') setStatus('stopped', 'err');
     else setStatus('Error: ' + e.message, 'err');
+    logLine('ERROR ' + e.message);
   } finally {
     clearInterval(tick);
     ac = null; goEl.dataset.busy = '';
-    goEl.disabled = false;
-    goEl.classList.remove('stop');
-    goEl.textContent = 'Send OTPs';
-    goEl.onclick = null;
+    goEl.disabled = false; goEl.classList.remove('stop');
+    goEl.textContent = 'Send OTPs'; goEl.onclick = null;
     loadHealth();
   }
 });
 
 function finish(ev, ms) {
   barEl.classList.remove('on');
-  const okNames = [...svc].filter(([, el]) => el._counts.ok > 0).map(([n]) => n);
-  const dead = [...svc].filter(([, el]) => el._counts.ok === 0).map(([n]) => n);
+  const all = [...rows.values()];
+  const okNames = all.filter(r => r.ok > 0).map(r => r.name);
+  const dead = all.filter(r => r.ok === 0).map(r => r.name);
 
-  setStatus(ev.sent + ' OTP gaye / ' + ev.total + ' requests · ' + ms + 'ms' +
-    (dead.length ? ' · ' + dead.length + ' dead' : ''), ev.sent ? 'good' : 'err');
+  setStatus(ev.sent + ' OTP gaye / ' + ev.total + ' requests · ' + ms + 'ms'
+    + (dead.length ? ' · ' + dead.length + ' services dead' : ''), ev.sent ? 'good' : 'err');
 
   report = [
     'number: ' + numEl.value,
-    'total: ' + ev.total + '  sent: ' + ev.sent + '  failed: ' + ev.failed,
+    'total: ' + ev.total + '  sent: ' + ev.sent + '  failed: ' + ev.failed + '  time: ' + ms + 'ms',
     'OK   (' + okNames.length + '): ' + (okNames.join(', ') || '-'),
     'DEAD (' + dead.length + '): ' + (dead.join(', ') || '-'),
     '',
-    ...[...svc].map(([n, el]) =>
-      n.padEnd(14) + ' ' + el._counts.ok + '/' + el._counts.total + '  ' +
-      el._counts.notes.slice(0, 2).join(' | ')),
+    ...all.map(r => r.name.padEnd(16) + ' ok=' + r.ok + '/' + r.tries
+      + '  status=' + r.status + '  ' + r.ms + 'ms  ' + (r.note || '').slice(0, 90)),
   ].join('\n');
 
-  debugEl.textContent = report;
+  diagEl.textContent = report;
   $('#copy').style.display = 'inline-block';
 }
 
 loadHealth();
+render();
 </script>
 </body>
-        </html>
+</html>
