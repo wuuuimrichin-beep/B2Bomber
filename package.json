@@ -14,6 +14,6 @@
     "express": "^4.19.2"
   },
   "optionalDependencies": {
-    "impit": "^3.0.0"
+    "impit": "^0.14.5"
   }
 }
