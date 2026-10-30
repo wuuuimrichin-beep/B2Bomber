@@ -107,7 +107,7 @@
     <div id="status"></div>
 
     <div class="foot">
-      <label class="toggle"><input type="checkbox" id="skipDead" checked /> dead skip karo</label>
+      <label class="toggle"><input type="checkbox" id="skipDead" checked /> skip dead</label>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="ghost" id="selftest">self-test</button>
         <button class="ghost" id="diag">diag</button>
@@ -128,7 +128,7 @@
       <th>Service</th><th class="num">tries</th><th class="num">ok</th><th class="num">fail</th>
       <th class="num">status</th><th class="num">ms</th><th>last response / error</th>
     </tr></thead>
-    <tbody id="rows"><tr><td colspan="7" style="color:#8b95a7">abhi kuch nahi chala</td></tr></tbody>
+    <tbody id="rows"><tr><td colspan="7" style="color:#8b95a7">nothing has run yet</td></tr></tbody>
   </table>
 
   <h2>Raw event log</h2>
@@ -176,12 +176,12 @@ $('#reset').addEventListener('click',async()=>{
   await fetch('/api/stats/reset',{method:'POST'});await loadHealth();setStatus('reset done','good')});
 
 $('#diag').addEventListener('click',async()=>{
-  diagEl.textContent='chal raha hai…';
+  diagEl.textContent='running…';
   try{const r=await fetch('/api/diag');diagEl.textContent=JSON.stringify(await r.json(),null,2)}
   catch(e){diagEl.textContent='diag fail: '+e.message}});
 
 $('#selftest').addEventListener('click',async()=>{
-  diagEl.textContent='self-test + path discovery chal raha hai…';
+  diagEl.textContent='running self-test + path discovery…';
   try{
     const r=await fetch('/api/selftest?number='+encodeURIComponent(digitsOf(numEl.value)||'9999999999'));
     const d=await r.json();
@@ -189,7 +189,7 @@ $('#selftest').addEventListener('click',async()=>{
     d.results.forEach(x=>upsert(x.id,x.name,{status:x.status,ms:x.ms,note:(x.error||'')+(x.snippet?' · '+x.snippet:''),url:x.url}));
     d.results.forEach(x=>bump(x.id,!!x.ok));
     render();diagEl.textContent=JSON.stringify(d,null,2);
-    setStatus('self-test: '+d.ok+'/'+d.total+' live (baaki bench)',d.ok?'good':'err');
+    setStatus('self-test: '+d.ok+'/'+d.total+' live (rest benched)',d.ok?'good':'err');
   }catch(e){diagEl.textContent='selftest fail: '+e.message}
   finally{loadHealth()}});
 
@@ -202,7 +202,7 @@ async function loadHealth(){
       +(d.solved?' · '+d.solved+' path solved':'');
     $('#reset').style.display=d.benched?'inline-block':'none';
     estimate();
-  }catch{$('#sub').textContent='server reachable nahi hai'}
+  }catch{$('#sub').textContent='server is not reachable'}
 }
 
 function upsert(id,name,patch){let r=rows.get(id);
@@ -211,7 +211,7 @@ function upsert(id,name,patch){let r=rows.get(id);
 function bump(id,ok){const r=rows.get(id);if(!r)return;r.tries++;ok?r.ok++:r.fail++;render()}
 function render(){
   const list=[...rows.values()].filter(r=>filter==='all'?true:filter==='ok'?r.ok>0:r.ok===0);
-  if(!list.length){rowsEl.innerHTML='<tr><td colspan="7" style="color:#8b95a7">abhi kuch nahi chala</td></tr>';return}
+  if(!list.length){rowsEl.innerHTML='<tr><td colspan="7" style="color:#8b95a7">nothing has run yet</td></tr>';return}
   rowsEl.innerHTML='';
   list.forEach(r=>{
     const tr=document.createElement('tr');
@@ -227,9 +227,9 @@ function render(){
 
 goEl.addEventListener('click',async()=>{
   if(goEl.dataset.busy)return;
-  const raw=numEl.value.trim();if(!raw)return setStatus('number daalo','err');
+  const raw=numEl.value.trim();if(!raw)return setStatus('enter a number','err');
   const digits=digitsOf(raw);
-  if(digits.length<11||digits.length>15)return setStatus('valid number daalo','err');
+  if(digits.length<11||digits.length>15)return setStatus('enter a valid number','err');
   numEl.value=digits;
 
   const repeat=Number($('#repeat').value), skipDead=$('#skipDead').checked;
@@ -239,7 +239,7 @@ goEl.addEventListener('click',async()=>{
   barEl.classList.add('on');$('#barFill').style.width='0%';
   $('#counters').classList.remove('hide');
   ['cSent','cFail','cDone'].forEach(i=>$('#'+i).textContent='0');
-  setStatus('start ho raha hai…');
+  setStatus('starting…');
 
   const t0=performance.now();
   const tick=setInterval(()=>{$('#cTime').textContent=((performance.now()-t0)/1000).toFixed(0)},200);
@@ -281,9 +281,9 @@ goEl.addEventListener('click',async()=>{
         }else if(ev.type==='error'){setStatus('server error: '+ev.error,'err')}
       }
     }
-    if(!got)setStatus('stream khula par koi event nahi','err');
-    else if(stopped)setStatus('stopped — '+sent+' OTP gaye','err');
-    else if(!report)setStatus('stream band ho gaya bina done','err');
+    if(!got)setStatus('stream opened but no events received','err');
+    else if(stopped)setStatus('stopped — '+sent+' OTPs sent','err');
+    else if(!report)setStatus('stream closed without done','err');
   }catch(e){
     if(e.name==='AbortError')setStatus('stopped','err');else setStatus('Error: '+e.message,'err');
     logLine('ERROR '+e.message);
@@ -299,7 +299,7 @@ function finish(ev,ms){
   const all=[...rows.values()];
   const okNames=all.filter(r=>r.ok>0).map(r=>r.name);
   const dead=all.filter(r=>r.ok===0).map(r=>r.name);
-  setStatus(ev.sent+' OTP gaye / '+ev.total+' requests · '+ms+'ms'+(dead.length?' · '+dead.length+' dead':''),ev.sent?'good':'err');
+  setStatus(ev.sent+' OTPs sent / '+ev.total+' requests · '+ms+'ms'+(dead.length?' · '+dead.length+' dead':''),ev.sent?'good':'err');
   report=['number: '+numEl.value,'total: '+ev.total+'  sent: '+ev.sent+'  failed: '+ev.failed+'  time: '+ms+'ms',
     'OK   ('+okNames.length+'): '+(okNames.join(', ')||'-'),'DEAD ('+dead.length+'): '+(dead.join(', ')||'-'),'',
     ...all.map(r=>r.name.padEnd(16)+' ok='+r.ok+'/'+r.tries+' status='+r.status+' '+(r.note||'').slice(0,90))].join('\n');
